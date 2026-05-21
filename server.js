@@ -12,6 +12,12 @@ app.use(express.json({ limit: '8mb' }));
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 
+// ── 관리자 비밀번호 검증 라우트 ──
+app.post('/api/verify', (req, res) => {
+  const ok = !!process.env.password && !!req.body && req.body.password === process.env.password;
+  res.json({ ok });
+});
+
 // ── AI 중계 라우트 ──
 // 브라우저는 이 서버의 /api/claude 만 호출하고, 실제 Anthropic 호출은 서버가 수행한다.
 app.post('/api/claude', async (req, res) => {
@@ -20,6 +26,10 @@ app.post('/api/claude', async (req, res) => {
     return res.status(500).json({
       error: 'ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다. Render 대시보드 > Environment 에서 설정하세요.',
     });
+  }
+  // 관리자 비밀번호 확인 — API 키 무단 소모 방지
+  if (!process.env.password || !req.body || req.body.password !== process.env.password) {
+    return res.status(401).json({ error: '관리자 인증이 필요합니다. 비밀번호가 올바르지 않거나 서버에 설정되지 않았습니다.' });
   }
   try {
     const { system, prompt, maxTokens } = req.body || {};

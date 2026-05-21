@@ -5,7 +5,7 @@ import {
   Sparkles, Loader2, Calendar, FileText, TrendingUp, TrendingDown,
   ArrowRight, RefreshCw, Bell, ScrollText, Target, Edit3,
   Pencil, ListChecks, PenTool, BarChart3, ChevronDown, Copy, Check,
-  Upload, FileSpreadsheet, Database, CalendarClock
+  Upload, FileSpreadsheet, Database, CalendarClock, Lock, Unlock
 } from 'lucide-react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -283,13 +283,20 @@ const PERFORMANCE_AREAS = [
 ];
 
 /* ==================== Claude API 호출 헬퍼 ==================== */
+// 관리자 인증 비밀번호 — 잠금 해제 시 설정되며 모든 AI 호출에 동봉된다 (서버가 검증).
+let __aiPassword = '';
+function setAIPassword(pw) { __aiPassword = pw || ''; }
+
 async function callClaude(systemContext, userPrompt, maxTokens = 4096) {
   // 브라우저 → 자체 백엔드(/api/claude) → Anthropic API
-  // API 키는 서버(server.js)의 환경변수에만 보관되어 노출되지 않는다.
+  // API 키는 서버 환경변수에만 보관되며, 관리자 비밀번호가 있어야 호출된다.
+  if (!__aiPassword) {
+    throw new Error('관리자 인증이 필요합니다. 좌측 하단 「관리자 모드」에서 비밀번호로 잠금을 해제하세요.');
+  }
   const response = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system: systemContext, prompt: userPrompt, maxTokens }),
+    body: JSON.stringify({ system: systemContext, prompt: userPrompt, maxTokens, password: __aiPassword }),
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -302,44 +309,72 @@ async function callClaude(systemContext, userPrompt, maxTokens = 4096) {
     .join('\n');
 }
 
-// AI 응답에서 JSON을 추출. LLM이 가끔 만드는 사소한 형식 오류(쉼표 누락 등)를 단계적으로 보정.
+// AI 응답에서 JSON을 추출. LLM이 만드는 형식 오류(앞뒤 설명문·쉼표 누락·제어문자 등)를 단계적으로 보정.
 function extractJSON(text) {
   let s = String(text == null ? '' : text)
     .replace(/```json\s*/gi, '')
     .replace(/```/g, '')
     .trim();
-  const start = s.indexOf('{');
-  const end = s.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error('AI 응답에서 JSON을 찾지 못했습니다. 버튼을 한 번 더 눌러 주세요.');
-  s = s.slice(start, end + 1);
+  if (s.indexOf('{') === -1) {
+    throw new Error('AI 응답에서 JSON을 찾지 못했습니다. 버튼을 한 번 더 눌러 주세요.');
+  }
 
-  // 1차: 그대로 파싱 — 정상 응답은 여기서 끝나며 아래 보정 로직을 거치지 않음
-  try { return JSON.parse(s); } catch (e1) { /* 계속 */ }
+  // 후보 1: 균형잡힌 첫 객체(앞뒤 설명문 제거)  /  후보 2: 첫 { ~ 마지막 }
+  const candidates = [];
+  const balanced = firstBalancedObject(s);
+  if (balanced) candidates.push(balanced);
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (b > a) candidates.push(s.slice(a, b + 1));
 
-  // 2차: 스마트 따옴표 → 표준 따옴표, 후행 쉼표 제거
-  const s2 = s
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/,(\s*[}\]])/g, '$1');
-  try { return JSON.parse(s2); } catch (e2) { /* 계속 */ }
-
-  // 3차: 배열·객체 요소 사이 누락된 쉼표 보정 (문자열 내부는 건드리지 않음)
-  try { return JSON.parse(insertMissingCommas(s2)); } catch (e3) { /* 계속 */ }
-
-  throw new Error('AI 응답을 JSON으로 변환하지 못했습니다. 버튼을 한 번 더 눌러 주세요.');
+  for (const cand of candidates) {
+    const cleaned = cand
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,(\s*[}\]])/g, '$1');
+    for (const variant of [cand, cleaned, repairJSON(cleaned)]) {
+      try { return JSON.parse(variant); } catch (e) { /* 다음 후보/변형 시도 */ }
+    }
+  }
+  throw new Error(
+    'AI 응답을 JSON으로 변환하지 못했습니다. 버튼을 한 번 더 눌러 주세요. (응답 앞부분: '
+    + s.slice(0, 150).replace(/\s+/g, ' ') + ')'
+  );
 }
 
-// 문자열 경계를 인식하며 누락된 쉼표를 보정 ( }{ · ][ · "" · 값 뒤 키 등 )
-function insertMissingCommas(src) {
+// 첫 '{' 와 짝이 맞는 '}' 까지의 객체 문자열 반환 (문자열 내부 중괄호는 무시)
+function firstBalancedObject(s) {
+  const start = s.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return s.slice(start, i + 1); }
+  }
+  return null;
+}
+
+// 문자열 경계를 인식해 (1) 누락된 쉼표 삽입 (2) 문자열 내부 raw 제어문자 이스케이프
+function repairJSON(src) {
   let out = '';
   let inStr = false, esc = false;
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (inStr) {
+      if (esc) { out += c; esc = false; continue; }
+      if (c === '\\') { out += c; esc = true; continue; }
+      if (c === '"') { out += c; inStr = false; continue; }
+      if (c === '\n') { out += '\\n'; continue; }
+      if (c === '\r') { out += '\\r'; continue; }
+      if (c === '\t') { out += '\\t'; continue; }
       out += c;
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
       continue;
     }
     if (c === '{' || c === '[' || c === '"') {
@@ -441,7 +476,73 @@ function SeverityDot({ severity }) {
 }
 
 /* ==================== 사이드바 ==================== */
-function Sidebar({ tab, setTab, adminMode, setAdminMode }) {
+/* ==================== 관리자 인증 모달 ==================== */
+function AuthModal({ onClose, onSuccess }) {
+  const [pw, setPw] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!pw.trim() || busy) return;
+    setBusy(true); setErr('');
+    try {
+      const r = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      const data = await r.json();
+      if (data && data.ok) onSuccess(pw);
+      else setErr('비밀번호가 올바르지 않습니다.');
+    } catch (e) {
+      setErr('인증 서버에 연결하지 못했습니다. (' + (e.message || e) + ')');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl p-6 w-[340px]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-1">
+          <Lock className="w-4 h-4 text-stone-700" />
+          <h3 className="text-base font-semibold text-stone-900" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+            관리자 인증
+          </h3>
+        </div>
+        <p className="text-xs text-stone-500 mb-4 leading-relaxed" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+          텍스트 편집과 AI 기능은 관리자 비밀번호가 필요합니다.
+        </p>
+        <input
+          type="password"
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          autoFocus
+          placeholder="비밀번호 입력"
+          className="w-full border border-stone-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-stone-500"
+          style={{ fontFamily: 'IBM Plex Sans KR' }}
+        />
+        {err && (
+          <p className="text-xs text-rose-700 mt-2" style={{ fontFamily: 'IBM Plex Sans KR' }}>{err}</p>
+        )}
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose}
+            className="flex-1 px-3 py-2 text-sm rounded border border-stone-300 text-stone-600 hover:bg-stone-50"
+            style={{ fontFamily: 'IBM Plex Sans KR' }}>취소</button>
+          <button onClick={submit} disabled={busy || !pw.trim()}
+            className="flex-1 px-3 py-2 text-sm rounded bg-stone-900 text-white hover:bg-stone-800 disabled:bg-stone-400 flex items-center justify-center gap-1.5"
+            style={{ fontFamily: 'IBM Plex Sans KR' }}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-3.5 h-3.5" />}
+            {busy ? '확인 중' : '잠금 해제'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ tab, setTab, adminMode, onLockToggle }) {
   const items = [
     { key: 'dashboard',  label: '대시보드', icon: LayoutDashboard, sub: 'Overview' },
     { key: 'discovery',  label: '모색',     icon: Search,          sub: 'Discovery' },
@@ -494,27 +595,31 @@ function Sidebar({ tab, setTab, adminMode, setAdminMode }) {
         })}
       </nav>
 
-      {/* 관리자 토글 */}
+      {/* 관리자 모드 (비밀번호 잠금) */}
       <div className="px-4 py-3 border-t border-stone-800">
         <button
-          onClick={() => setAdminMode(!adminMode)}
+          onClick={onLockToggle}
           className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs transition ${
             adminMode ? 'bg-amber-300 text-stone-900' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
           }`}
           style={{ fontFamily: 'IBM Plex Sans KR' }}
         >
           <span className="flex items-center gap-2">
-            <Pencil className="w-3.5 h-3.5" />
-            텍스트 편집 모드
+            {adminMode ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            관리자 모드
           </span>
           <span className={`text-[10px] tracking-widest uppercase ${adminMode ? 'text-stone-700' : 'text-stone-500'}`}
             style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
-            {adminMode ? 'ON' : 'OFF'}
+            {adminMode ? '해제됨' : '잠김'}
           </span>
         </button>
-        {adminMode && (
+        {adminMode ? (
           <p className="text-[10px] text-amber-300 mt-2 leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-            노란 점선으로 표시된 문구를 클릭하면 편집할 수 있어요.
+            텍스트 편집·AI 기능이 활성화됐습니다. 노란 점선 문구를 클릭해 편집하세요.
+          </p>
+        ) : (
+          <p className="text-[10px] text-stone-500 mt-2 leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+            텍스트 편집·AI 기능은 관리자 전용입니다. 클릭해 비밀번호를 입력하세요.
           </p>
         )}
       </div>
@@ -2288,12 +2393,29 @@ export default function App() {
   const [tab, setTab] = useState('dashboard');
   const [adminMode, setAdminMode] = useState(false);
   const [texts, setTexts] = useState(DEFAULT_TEXTS);
+  const [authOpen, setAuthOpen] = useState(false);
+
+  // 관리자 모드 잠금/해제 — 해제 시 비밀번호 모달, 잠글 땐 즉시 잠금
+  function handleLockToggle() {
+    if (adminMode) {
+      setAdminMode(false);
+      setAIPassword('');
+    } else {
+      setAuthOpen(true);
+    }
+  }
+
+  function handleAuthSuccess(pw) {
+    setAIPassword(pw);   // AI 호출에 쓰일 비밀번호 보관
+    setAdminMode(true);
+    setAuthOpen(false);
+  }
 
   return (
     <div className="min-h-screen flex" style={{ backgroundColor: '#F5F1E8' }}>
       <style>{FONT_LINK}</style>
 
-      <Sidebar tab={tab} setTab={setTab} adminMode={adminMode} setAdminMode={setAdminMode} />
+      <Sidebar tab={tab} setTab={setTab} adminMode={adminMode} onLockToggle={handleLockToggle} />
 
       <main className="flex-1 overflow-auto">
         <div className="max-w-[1280px] mx-auto px-10 py-10">
@@ -2303,6 +2425,8 @@ export default function App() {
           {tab === 'operations' && <OperationsView texts={texts} setTexts={setTexts} adminMode={adminMode} />}
         </div>
       </main>
+
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onSuccess={handleAuthSuccess} />}
     </div>
   );
 }
