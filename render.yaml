@@ -1,0 +1,14 @@
+# Render Blueprint — 이 파일이 있으면 Render가 자동으로 서비스를 구성합니다.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: hansung-ax-platform
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false              # 비밀값 — Render 대시보드에서 직접 입력
+      - key: CLAUDE_MODEL
+        value: claude-sonnet-4-6
