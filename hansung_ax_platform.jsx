@@ -294,20 +294,44 @@ async function callClaude(systemContext, userPrompt, model) {
   if (!__aiPassword) {
     throw new Error('관리자 인증이 필요합니다. 좌측 하단 「관리자 모드」에서 비밀번호로 잠금을 해제하세요.');
   }
-  const response = await fetch('/api/claude', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system: systemContext, prompt: userPrompt, model: model || '', password: __aiPassword }),
+  const body = JSON.stringify({
+    system: systemContext, prompt: userPrompt, model: model || '', password: __aiPassword,
   });
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`API 오류: ${response.status} ${errText.slice(0, 200)}`);
+  // 무료 서버 콜드 스타트(잠자기→기동) 대응 — 502/503/504·네트워크 오류 시 자동 재시도
+  const waits = [5000, 10000, 12000];
+  let lastErr = '연결 실패';
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    try {
+      const response = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return (data.content || [])
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+      }
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        // 무료 서버가 기동 중 — 잠시 후 재시도
+        lastErr = '서버 응답 ' + response.status + ' (기동 중일 수 있음)';
+      } else {
+        // 그 외 4xx/5xx = 실제 오류 → 즉시 중단
+        const errText = await response.text();
+        throw new Error(`API 오류: ${response.status} ${errText.slice(0, 200)}`);
+      }
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      if (/^API 오류/.test(msg)) throw e;   // 실제 오류는 재시도하지 않음
+      lastErr = msg;                         // 네트워크 오류 → 재시도
+    }
+    if (attempt < waits.length) {
+      await new Promise((r) => setTimeout(r, waits[attempt]));
+    }
   }
-  const data = await response.json();
-  return (data.content || [])
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
+  throw new Error('AI 서버에 연결하지 못했습니다. 무료 서버가 깨어나는 중일 수 있으니 30초쯤 후 다시 시도해 주세요. (' + lastErr + ')');
 }
 
 // AI 응답에서 JSON을 추출. LLM이 만드는 형식 오류(앞뒤 설명문·쉼표 누락·제어문자 등)를 단계적으로 보정.
