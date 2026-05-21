@@ -287,16 +287,17 @@ const PERFORMANCE_AREAS = [
 let __aiPassword = '';
 function setAIPassword(pw) { __aiPassword = pw || ''; }
 
-async function callClaude(systemContext, userPrompt, maxTokens = 4096) {
+async function callClaude(systemContext, userPrompt, model) {
   // 브라우저 → 자체 백엔드(/api/claude) → Anthropic API
   // API 키는 서버 환경변수에만 보관되며, 관리자 비밀번호가 있어야 호출된다.
+  // 출력 토큰 제한 없음 — 서버가 잘린 응답을 끝까지 이어받아 완성한다(에이전트 방식).
   if (!__aiPassword) {
     throw new Error('관리자 인증이 필요합니다. 좌측 하단 「관리자 모드」에서 비밀번호로 잠금을 해제하세요.');
   }
   const response = await fetch('/api/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system: systemContext, prompt: userPrompt, maxTokens, password: __aiPassword }),
+    body: JSON.stringify({ system: systemContext, prompt: userPrompt, model: model || '', password: __aiPassword }),
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -1270,7 +1271,8 @@ JSON 스키마만 출력하세요:
         ? `대학정보공시 · ${DISCLOSURE_META.공시연도}학년도 기준 (${DISCLOSURE_META.출처}, ${DISCLOSURE_META.수집일} 수집)`
         : `대학 자체 업로드 자료 · 원본 ${files.length}개 파일 AI 자동 집계 (${aggTime || '집계 시점 미상'})`;
       const raw = await callClaude(systemPrompt,
-        `[사업계획서]\n${planText}\n\n[로우데이터]\n출처·기준시점: ${sourceLabel}\n\n${rawData}\n\n위 두 문서를 대조하여 모든 수치 불일치를 찾아주세요. 로우데이터의 기준 시점과 사업계획서가 인용한 연도·시점이 다르면 반드시 '시점 불일치'로 지적하세요.`);
+        `[사업계획서]\n${planText}\n\n[로우데이터]\n출처·기준시점: ${sourceLabel}\n\n${rawData}\n\n위 두 문서를 대조하여 모든 수치 불일치를 찾아주세요. 로우데이터의 기준 시점과 사업계획서가 인용한 연도·시점이 다르면 반드시 '시점 불일치'로 지적하세요.`,
+        'haiku');
       const parsed = extractJSON(raw);
       parsed._기준시점 = sourceLabel;
       setResult(parsed);
@@ -1622,7 +1624,7 @@ JSON 스키마 (다른 텍스트 출력 금지):
   async function runOutline() {
     setOutlineLoading(true); setOutlineError(null); setOutline(null);
     try {
-      const raw = await callClaude(outlineSystem, `다음 공고문을 분석해 필수 작성 항목을 추출해주세요:\n\n${announcement}`);
+      const raw = await callClaude(outlineSystem, `다음 공고문을 분석해 필수 작성 항목을 추출해주세요:\n\n${announcement}`, 'haiku');
       setOutline(extractJSON(raw));
     } catch (e) { setOutlineError(e.message); }
     finally { setOutlineLoading(false); }

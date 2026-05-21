@@ -11,6 +11,7 @@ const app = express();
 app.use(express.json({ limit: '8mb' }));
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
 
 // ── 관리자 비밀번호 검증 라우트 ──
 app.post('/api/verify', (req, res) => {
@@ -32,24 +33,46 @@ app.post('/api/claude', async (req, res) => {
     return res.status(401).json({ error: '관리자 인증이 필요합니다. 비밀번호가 올바르지 않거나 서버에 설정되지 않았습니다.' });
   }
   try {
-    const { system, prompt, maxTokens } = req.body || {};
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: maxTokens || 4096,
-        temperature: 0,
-        system: system || '',
-        messages: [{ role: 'user', content: prompt || '' }],
-      }),
-    });
-    const data = await r.json();
-    return res.status(r.status).json(data);
+    const { system, prompt, model } = req.body || {};
+    const chosenModel = model === 'haiku' ? HAIKU_MODEL : MODEL;
+    const PER_ROUND = 8192;   // 라운드당 최대 출력 토큰
+    const MAX_ROUNDS = 12;    // 안전 상한 (무한루프 방지)
+
+    // 에이전트 방식: 응답이 max_tokens로 잘리면, 부분응답을 assistant로 넣어
+    // 끊긴 지점부터 이어받기를 반복 → 완성된 전체 텍스트를 반환한다.
+    let assistantSoFar = '';
+    let lastStop = '';
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const messages = [{ role: 'user', content: prompt || '' }];
+      if (assistantSoFar) {
+        messages.push({ role: 'assistant', content: assistantSoFar.replace(/\s+$/, '') });
+      }
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: chosenModel,
+          max_tokens: PER_ROUND,
+          temperature: 0,
+          system: system || '',
+          messages,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) return res.status(r.status).json(data);
+      const text = (data.content || [])
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+      assistantSoFar += text;
+      lastStop = data.stop_reason;
+      if (data.stop_reason !== 'max_tokens') break;   // 완성됨
+    }
+    return res.json({ content: [{ type: 'text', text: assistantSoFar }], stop_reason: lastStop });
   } catch (e) {
     return res.status(500).json({ error: 'AI 호출 실패: ' + String(e) });
   }
