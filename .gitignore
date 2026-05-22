@@ -13,6 +13,10 @@ node_modules/
 dist/
 build/
 
+# ===== 런타임 생성 파일 =====
+# 관리자가 편집한 페이지 문구 저장본 (서버가 실행 중 생성)
+texts.json
+
 # ===== OS · 에디터 생성 파일 =====
 .DS_Store
 Thumbs.db

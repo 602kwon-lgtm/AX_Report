@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   LayoutDashboard, Search, FileEdit, Activity, ChevronRight,
   Building2, CheckCircle2, XCircle, AlertCircle,
@@ -47,6 +47,16 @@ const DEFAULT_TEXTS = {
     description: '제출한 사업계획서를 AI가 분석하여 의무사항을 월별 타임라인으로 정리하고, 6영역 성과 지수에 대한 정성적 개선 대책을 컨설팅합니다.',
   },
 };
+
+// 기본 문구와 서버 저장본을 병합 — 저장본에 없는 새 항목은 기본값을 유지한다.
+function mergeTexts(base, saved) {
+  if (!saved || typeof saved !== 'object') return base;
+  const out = {};
+  for (const key of Object.keys(base)) {
+    out[key] = { ...base[key], ...(saved[key] || {}) };
+  }
+  return out;
+}
 
 /* ---------------- 한성대 프로필 (시스템 프롬프트에 주입) ---------------- */
 const DEFAULT_PROFILE = {
@@ -286,6 +296,7 @@ const PERFORMANCE_AREAS = [
 // 관리자 인증 비밀번호 — 잠금 해제 시 설정되며 모든 AI 호출에 동봉된다 (서버가 검증).
 let __aiPassword = '';
 function setAIPassword(pw) { __aiPassword = pw || ''; }
+function getAIPassword() { return __aiPassword; }
 
 async function callClaude(systemContext, userPrompt, model) {
   // 브라우저 → 자체 백엔드(/api/claude) → Anthropic API
@@ -567,7 +578,7 @@ function AuthModal({ onClose, onSuccess }) {
   );
 }
 
-function Sidebar({ tab, setTab, adminMode, onLockToggle }) {
+function Sidebar({ tab, setTab, adminMode, onLockToggle, onSaveTexts, textsSaving }) {
   const items = [
     { key: 'dashboard',  label: '대시보드', icon: LayoutDashboard, sub: 'Overview' },
     { key: 'discovery',  label: '모색',     icon: Search,          sub: 'Discovery' },
@@ -639,9 +650,26 @@ function Sidebar({ tab, setTab, adminMode, onLockToggle }) {
           </span>
         </button>
         {adminMode ? (
-          <p className="text-[10px] text-amber-300 mt-2 leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-            텍스트 편집·AI 기능이 활성화됐습니다. 노란 점선 문구를 클릭해 편집하세요.
-          </p>
+          <>
+            <p className="text-[10px] text-amber-300 mt-2 leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+              텍스트 편집·AI 기능이 활성화됐습니다. 노란 점선 문구를 클릭해 편집한 뒤, 아래 「편집 내용 저장」을 눌러야 반영됩니다.
+            </p>
+            <button
+              onClick={onSaveTexts}
+              disabled={textsSaving === 'saving'}
+              className={`w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-2 rounded text-xs font-medium transition disabled:opacity-70 ${
+                textsSaving === 'saved' ? 'bg-emerald-300 text-stone-900'
+                  : textsSaving === 'error' ? 'bg-rose-300 text-stone-900'
+                  : 'bg-stone-100 text-stone-900 hover:bg-white'
+              }`}
+              style={{ fontFamily: 'IBM Plex Sans KR' }}
+            >
+              {textsSaving === 'saving' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> 저장 중…</>}
+              {textsSaving === 'saved' && <><Check className="w-3.5 h-3.5" /> 저장 완료</>}
+              {textsSaving === 'error' && <><XCircle className="w-3.5 h-3.5" /> 저장 실패 · 다시 시도</>}
+              {textsSaving === 'idle' && <><Database className="w-3.5 h-3.5" /> 편집 내용 저장</>}
+            </button>
+          </>
         ) : (
           <p className="text-[10px] text-stone-500 mt-2 leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
             텍스트 편집·AI 기능은 관리자 전용입니다. 클릭해 비밀번호를 입력하세요.
@@ -2419,7 +2447,16 @@ export default function App() {
   const [tab, setTab] = useState('dashboard');
   const [adminMode, setAdminMode] = useState(false);
   const [texts, setTexts] = useState(DEFAULT_TEXTS);
+  const [textsSaving, setTextsSaving] = useState('idle');   // idle | saving | saved | error
   const [authOpen, setAuthOpen] = useState(false);
+
+  // 앱 시작 시 서버에 저장된 페이지 문구를 불러온다 (없으면 기본값 유지).
+  useEffect(() => {
+    fetch('/api/texts')
+      .then((r) => r.json())
+      .then((d) => { if (d && d.texts) setTexts(mergeTexts(DEFAULT_TEXTS, d.texts)); })
+      .catch(() => {});
+  }, []);
 
   // 관리자 모드 잠금/해제 — 해제 시 비밀번호 모달, 잠글 땐 즉시 잠금
   function handleLockToggle() {
@@ -2437,11 +2474,31 @@ export default function App() {
     setAuthOpen(false);
   }
 
+  // 편집한 페이지 문구를 서버에 저장 — 새로고침·재접속 후에도 유지된다.
+  async function handleSaveTexts() {
+    if (textsSaving === 'saving') return;
+    setTextsSaving('saving');
+    try {
+      const r = await fetch('/api/texts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: getAIPassword(), texts }),
+      });
+      if (!r.ok) throw new Error();
+      setTextsSaving('saved');
+      setTimeout(() => setTextsSaving('idle'), 2500);
+    } catch {
+      setTextsSaving('error');
+      setTimeout(() => setTextsSaving('idle'), 3500);
+    }
+  }
+
   return (
     <div className="min-h-screen flex" style={{ backgroundColor: '#F5F1E8' }}>
       <style>{FONT_LINK}</style>
 
-      <Sidebar tab={tab} setTab={setTab} adminMode={adminMode} onLockToggle={handleLockToggle} />
+      <Sidebar tab={tab} setTab={setTab} adminMode={adminMode} onLockToggle={handleLockToggle}
+        onSaveTexts={handleSaveTexts} textsSaving={textsSaving} />
 
       <main className="flex-1 overflow-auto">
         <div className="max-w-[1280px] mx-auto px-10 py-10">

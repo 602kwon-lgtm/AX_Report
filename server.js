@@ -3,6 +3,7 @@
 // 2) /api/claude 경로로 Anthropic API를 안전하게 중계 (API 키는 서버 환경변수에만 보관)
 import 'dotenv/config';
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -75,6 +76,40 @@ app.post('/api/claude', async (req, res) => {
     return res.json({ content: [{ type: 'text', text: assistantSoFar }], stop_reason: lastStop });
   } catch (e) {
     return res.status(500).json({ error: 'AI 호출 실패: ' + String(e) });
+  }
+});
+
+// ── 페이지 문구 저장/불러오기 라우트 ──
+// 관리자가 편집한 페이지 문구를 서버 파일(texts.json)에 보관한다.
+// GET 은 누구나 호출(화면 표시용), POST(저장)는 관리자 비밀번호가 필요하다.
+const TEXTS_FILE = path.join(__dirname, 'texts.json');
+
+app.get('/api/texts', (req, res) => {
+  try {
+    if (fs.existsSync(TEXTS_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(TEXTS_FILE, 'utf-8'));
+      return res.json({ texts: saved });
+    }
+  } catch (e) {
+    console.error('texts.json 읽기 실패:', e);
+  }
+  return res.json({ texts: null });   // 저장된 문구 없음 → 프런트가 기본값 사용
+});
+
+app.post('/api/texts', (req, res) => {
+  // 관리자 비밀번호 확인 — 무단 수정 방지
+  if (!process.env.password || !req.body || req.body.password !== process.env.password) {
+    return res.status(401).json({ error: '관리자 인증이 필요합니다. 비밀번호가 올바르지 않습니다.' });
+  }
+  const { texts } = req.body || {};
+  if (!texts || typeof texts !== 'object' || Array.isArray(texts)) {
+    return res.status(400).json({ error: '저장할 문구 데이터가 올바르지 않습니다.' });
+  }
+  try {
+    fs.writeFileSync(TEXTS_FILE, JSON.stringify(texts, null, 2), 'utf-8');
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: '문구 저장 실패: ' + String(e) });
   }
 });
 
