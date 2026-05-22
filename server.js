@@ -16,14 +16,15 @@ const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || 'claude-haiku-4-5-20251001
 
 // ── Anthropic API 호출 (자동 재시도 포함) ──
 // 529(과부하)·429(속도제한)·5xx(서버오류)·네트워크 오류는 "일시적"이므로,
-// 점점 더 길게 기다리며 최대 5번까지 자동으로 다시 시도한다(지수 백오프).
+// 점점 더 길게 기다리며 자동으로 다시 시도한다(지수 백오프).
 const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
-const RETRY_WAITS_MS = [2000, 5000, 10000, 20000, 30000];   // 재시도 사이 대기시간
+const RETRY_WAITS_MS = [2000, 5000, 10000, 20000, 30000];   // 기본 재시도 대기시간(최대 5회)
+const FAST_RETRY_MS = [2000, 5000];                          // 모델 전환 전 1차 모델용(빠르게 2회)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function callAnthropic(apiKey, payload) {
+async function callAnthropic(apiKey, payload, retryWaits = RETRY_WAITS_MS) {
   let lastInfo = '연결 실패';
-  for (let attempt = 0; attempt <= RETRY_WAITS_MS.length; attempt++) {
+  for (let attempt = 0; attempt <= retryWaits.length; attempt++) {
     let r;
     try {
       r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -37,9 +38,9 @@ async function callAnthropic(apiKey, payload) {
       });
     } catch (e) {
       lastInfo = '네트워크 오류: ' + String(e);   // fetch 자체 실패 → 재시도 대상
-      if (attempt < RETRY_WAITS_MS.length) {
-        console.warn(`[Anthropic 재시도 ${attempt + 1}/${RETRY_WAITS_MS.length}] ${lastInfo}`);
-        await sleep(RETRY_WAITS_MS[attempt]);
+      if (attempt < retryWaits.length) {
+        console.warn(`[Anthropic 재시도 ${attempt + 1}/${retryWaits.length}] ${lastInfo}`);
+        await sleep(retryWaits[attempt]);
         continue;
       }
       return { ok: false, status: 503, data: { error: { message: lastInfo } } };
@@ -48,12 +49,12 @@ async function callAnthropic(apiKey, payload) {
     if (r.ok) return { ok: true, status: r.status, data };
 
     // 일시적 오류면 재시도, 그 외(400·401 등 영구 오류)는 즉시 반환한다.
-    if (RETRYABLE.has(r.status) && attempt < RETRY_WAITS_MS.length) {
+    if (RETRYABLE.has(r.status) && attempt < retryWaits.length) {
       const retryAfter = Number(r.headers.get('retry-after'));   // 429는 서버 권고 대기시간(초)
       const wait = Number.isFinite(retryAfter) && retryAfter > 0
         ? retryAfter * 1000
-        : RETRY_WAITS_MS[attempt];
-      console.warn(`[Anthropic 재시도 ${attempt + 1}/${RETRY_WAITS_MS.length}] HTTP ${r.status} — ${Math.round(wait / 1000)}초 후 다시 시도`);
+        : retryWaits[attempt];
+      console.warn(`[Anthropic 재시도 ${attempt + 1}/${retryWaits.length}] HTTP ${r.status} — ${Math.round(wait / 1000)}초 후 다시 시도`);
       await sleep(wait);
       lastInfo = `HTTP ${r.status}`;
       continue;
@@ -94,6 +95,7 @@ app.post('/api/claude', async (req, res) => {
     //  대화는 반드시 user 메시지로 끝나야 한다.)
     let assistantSoFar = '';
     let lastStop = '';
+    let activeModel = chosenModel;   // 라운드 도중 모델이 대체되면 이후 라운드도 그 모델을 유지한다.
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const messages = [{ role: 'user', content: prompt || '' }];
       if (assistantSoFar) {
@@ -103,19 +105,31 @@ app.post('/api/claude', async (req, res) => {
           content: '직전 응답이 출력 길이 제한으로 중간에 끊겼습니다. 새로운 인사말·설명·재시작 없이, 끊긴 바로 그 지점부터 나머지 내용을 그대로 이어서 출력하세요.',
         });
       }
-      const result = await callAnthropic(apiKey, {
-        model: chosenModel,
+      const payloadBase = {
         max_tokens: PER_ROUND,
         temperature: 0,
         system: system || '',
         messages,
-      });
+      };
+      // 1차: 요청받은 모델로 호출. 기본 모델이 아니면(예: haiku) 빠르게 몇 번만 시도한다.
+      let result = await callAnthropic(
+        apiKey,
+        { ...payloadBase, model: activeModel },
+        activeModel === MODEL ? RETRY_WAITS_MS : FAST_RETRY_MS,
+      );
+      // 1차 모델이 과부하(529)·속도제한(429)이면 — Anthropic 모델별 장애 대응 —
+      // 정상 동작 중인 기본 모델(MODEL)로 자동 전환해 다시 시도한다.
+      if (!result.ok && (result.status === 529 || result.status === 429) && activeModel !== MODEL) {
+        console.warn(`[모델 대체] ${activeModel} 응답 실패(${result.status}) → ${MODEL}로 전환`);
+        activeModel = MODEL;
+        result = await callAnthropic(apiKey, { ...payloadBase, model: MODEL }, RETRY_WAITS_MS);
+      }
       if (!result.ok) {
-        // 자동 재시도까지 했는데도 실패. 529(과부하)·429(속도제한)는
+        // 자동 재시도·모델 전환까지 했는데도 실패. 529·429는
         // 사용자가 알아볼 수 있는 안내문으로 바꿔 전달한다.
         if (result.status === 529 || result.status === 429) {
           return res.status(529).json({
-            error: 'AI 서버(Anthropic)가 지금 매우 혼잡합니다. 자동으로 여러 번 다시 시도했지만 계속 실패했습니다. 5~10분 후 다시 실행해 주세요.',
+            error: 'AI 서버(Anthropic)가 지금 전체적으로 혼잡합니다. 자동 재시도와 다른 모델 전환까지 시도했지만 계속 실패했습니다. 5~10분 후 다시 실행해 주세요.',
           });
         }
         return res.status(result.status).json(result.data);
