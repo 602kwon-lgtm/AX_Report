@@ -269,13 +269,6 @@ const DISCLOSURE_RAW_DATA = (() => {
   return header + '\n' + body;
 })();
 
-const MOCK_SELECTED_PROJECT = {
-  사업명: '2026 일반대학 학사구조 혁신지원사업',
-  주관기관: '교육부',
-  사업기간: '2026.07 ~ 2029.06 (3년)',
-  총사업비: '90억원',
-};
-
 /* ---------------- 6영역 성과 (지수는 코드 산출, 근거는 2024 공시 실데이터) ---------------- */
 const PERFORMANCE_AREAS = [
   { area: '교육',     current: 75, prev: 79, target: 85, change: -5.1,
@@ -509,6 +502,55 @@ function VerdictBadge({ verdict }) {
 function SeverityDot({ severity }) {
   const map = { 높음: 'bg-rose-500', 중간: 'bg-amber-500', 낮음: 'bg-stone-400' };
   return <span className={`inline-block w-2 h-2 rounded-full ${map[severity] || 'bg-stone-400'}`}></span>;
+}
+
+/* ==================== 대상 사업 선택기 (계획·운영 공용) ==================== */
+// 수집된 공고(MOCK_ANNOUNCEMENTS) 중 작업 대상 사업을 고르는 검정 배경 선택기.
+function ProjectSelector({ selectedId, onSelect }) {
+  return (
+    <div className="bg-stone-900 text-stone-100 rounded p-4 mb-6">
+      <div className="flex items-center gap-2 mb-3">
+        <Target className="w-4 h-4 text-amber-300" />
+        <span className="text-[10px] tracking-[0.2em] text-stone-400 uppercase"
+          style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+          대상 사업 선택 · Target Project
+        </span>
+        <span className="text-[11px] text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+          — 수집된 공고 {MOCK_ANNOUNCEMENTS.length}건 중 선택하세요
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {MOCK_ANNOUNCEMENTS.map((a) => {
+          const on = a.id === selectedId;
+          return (
+            <button
+              key={a.id}
+              onClick={() => onSelect(a.id)}
+              className={`text-left rounded p-3 border transition ${
+                on
+                  ? 'bg-stone-100 text-stone-900 border-stone-100'
+                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700 hover:text-stone-100'
+              }`}
+              style={{ fontFamily: 'IBM Plex Sans KR' }}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium tracking-wide ${
+                  on ? 'bg-rose-900 text-rose-50' : 'bg-stone-700 text-stone-300'
+                }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{a.tag}</span>
+                {on
+                  ? <CheckCircle2 className="w-4 h-4 text-rose-800" />
+                  : <span className="w-4 h-4 rounded-full border border-stone-600" />}
+              </div>
+              <div className="text-sm font-medium leading-snug mb-1.5">{a.title}</div>
+              <div className={`text-[11px] leading-relaxed ${on ? 'text-stone-600' : 'text-stone-500'}`}>
+                {a.agency}<br />마감 {a.deadline} · {a.budget}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /* ==================== 사이드바 ==================== */
@@ -1140,6 +1182,7 @@ function PlanningView({ texts, setTexts, adminMode }) {
 function PlanningDoubleCheck() {
   const [planText, setPlanText] = useState(SAMPLE_PLAN_TEXT);
   const [mode, setMode] = useState('disclosure'); // 'disclosure' | 'upload'
+  const [projectId, setProjectId] = useState('risc-2026'); // 대상 사업 (수집된 공고 중 선택)
 
   // 대학정보공시 데이터 (OpenAPI 수집본 · 편집 가능)
   const [disclosureData, setDisclosureData] = useState(DISCLOSURE_RAW_DATA);
@@ -1334,15 +1377,7 @@ JSON 스키마만 출력하세요:
 
   return (
     <div>
-      <div className="bg-stone-900 text-stone-100 rounded p-4 mb-4 grid grid-cols-4 gap-4">
-        {Object.entries(MOCK_SELECTED_PROJECT).map(([k, v]) => (
-          <div key={k}>
-            <div className="text-[10px] tracking-widest text-stone-400 uppercase mb-1"
-              style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{k}</div>
-            <div className="text-sm text-stone-100" style={{ fontFamily: 'IBM Plex Sans KR' }}>{v}</div>
-          </div>
-        ))}
-      </div>
+      <ProjectSelector selectedId={projectId} onSelect={setProjectId} />
 
       {/* 데이터 출처 메뉴 */}
       <div className="flex items-center gap-1 mb-3 bg-stone-100 rounded p-1 w-fit">
@@ -1629,6 +1664,7 @@ function PlanningAssist() {
   // 공고문은 SW중심대학을 기본 예시로
   const defaultAnn = MOCK_ANNOUNCEMENTS[0].fullText;
   const [announcement, setAnnouncement] = useState(defaultAnn);
+  const [projectId, setProjectId] = useState(MOCK_ANNOUNCEMENTS[0].id); // 대상 사업 선택
 
   // 1. 필수 작성 항목
   const [outline, setOutline] = useState(null);
@@ -1761,31 +1797,27 @@ JSON 스키마:
     } catch {}
   }
 
+  // 대상 사업 선택 시 공고문 전문을 자동 입력 (이후 직접 편집 가능)
+  function selectProject(id) {
+    setProjectId(id);
+    const a = MOCK_ANNOUNCEMENTS.find((x) => x.id === id);
+    if (a) setAnnouncement(a.fullText);
+  }
+
   return (
     <div>
+      <ProjectSelector selectedId={projectId} onSelect={selectProject} />
+
       {/* 공고문 입력 */}
       <div className="bg-white border border-stone-200 rounded mb-6">
-        <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-stone-700" />
-            <h3 className="text-sm font-semibold" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-              대상 공고문
-            </h3>
-            <span className="text-xs text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-              (기본: SW중심대학)
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {MOCK_ANNOUNCEMENTS.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => setAnnouncement(a.fullText)}
-                className="text-[11px] text-stone-600 hover:text-rose-800 underline-offset-2 hover:underline"
-                style={{ fontFamily: 'IBM Plex Sans KR' }}>
-                {a.title.replace(/^\d+년도?\s*/, '').slice(0, 16)}
-              </button>
-            )).reduce((acc, el, i, arr) => (i < arr.length - 1 ? [...acc, el, <span key={`s${i}`} className="text-stone-300">·</span>] : [...acc, el]), [])}
-          </div>
+        <div className="px-5 py-3 border-b border-stone-200 flex items-center gap-2">
+          <FileText className="w-4 h-4 text-stone-700" />
+          <h3 className="text-sm font-semibold" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+            대상 공고문 전문
+          </h3>
+          <span className="text-xs text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+            — 위에서 사업을 선택하면 자동 입력됩니다 · 직접 편집 가능
+          </span>
         </div>
         <textarea
           value={announcement}
@@ -2078,6 +2110,7 @@ JSON 스키마:
 function OperationsView({ texts, setTexts, adminMode }) {
   const [submittedPlan, setSubmittedPlan] = useState(SAMPLE_PLAN_TEXT);
   const [planExpanded, setPlanExpanded] = useState(false);
+  const [projectId, setProjectId] = useState('risc-2026'); // 대상 사업 (수집된 공고 중 선택)
 
   const [checklist, setChecklist] = useState(null);
   const [checkLoading, setCheckLoading] = useState(false);
@@ -2177,15 +2210,8 @@ JSON 스키마:
     <div>
       <PageHeader pageKey="operations" texts={texts} setTexts={setTexts} adminMode={adminMode} />
 
-      {/* 사업 컨텍스트 카드 */}
-      <div className="bg-stone-900 text-stone-100 rounded p-4 mb-6 grid grid-cols-4 gap-4">
-        {Object.entries(MOCK_SELECTED_PROJECT).map(([k, v]) => (
-          <div key={k}>
-            <div className="text-[10px] tracking-widest text-stone-400 uppercase mb-1" style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{k}</div>
-            <div className="text-sm text-stone-100" style={{ fontFamily: 'IBM Plex Sans KR' }}>{v}</div>
-          </div>
-        ))}
-      </div>
+      {/* 대상 사업 선택 */}
+      <ProjectSelector selectedId={projectId} onSelect={setProjectId} />
 
       {/* 1) 제출된 사업계획서 입력 + 체크리스트 */}
       <section className="bg-white border border-stone-200 rounded mb-6">
