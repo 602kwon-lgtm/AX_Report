@@ -2281,6 +2281,45 @@ JSON 스키마:
     finally { setCheckLoading(false); }
   }
 
+  // 체크리스트를 엑셀(.xlsx)로 내려받는다 — 월별 의무사항을 한 줄씩 펼쳐 시트로 작성.
+  function downloadChecklistExcel() {
+    if (!checklist) return;
+    const rows = [];
+    (checklist.월별타임라인 || []).forEach((m) => {
+      (m.항목 || []).forEach((it) => {
+        rows.push({
+          '월': m.월 || '',
+          '유형': it.유형 || '',
+          '의무사항': it.제목 || '',
+          '우선순위': it.우선순위 || '',
+          '출처(사업계획서 내 위치)': it.출처 || '',
+          '상세설명': it.설명 || '',
+          '완료여부': '',
+        });
+      });
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 10 }, { wch: 8 }, { wch: 38 }, { wch: 9 },
+      { wch: 24 }, { wch: 52 }, { wch: 10 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, '의무사항 체크리스트');
+
+    // 일정이 불명확한 항목은 별도 시트로 첨부
+    if (checklist.리스크 && checklist.리스크.length) {
+      const riskWs = XLSX.utils.json_to_sheet(
+        checklist.리스크.map((r, i) => ({ '번호': i + 1, '일정 불명확 항목': r }))
+      );
+      riskWs['!cols'] = [{ wch: 6 }, { wch: 72 }];
+      XLSX.utils.book_append_sheet(wb, riskWs, '검토 필요');
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const safeName = (checklist.사업명 || '사업').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 40);
+    XLSX.writeFile(wb, `연간 의무사항 체크리스트_${safeName}_${today}.xlsx`);
+  }
+
   async function runReport() {
     setReportLoading(true); setReportError(null); setReport(null);
     try {
@@ -2372,9 +2411,18 @@ JSON 스키마:
             연간 의무사항 체크리스트
           </h3>
           {checklist && (
-            <span className="ml-auto text-[10px] tracking-widest text-emerald-800 uppercase" style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
-              from 사업계획서
-            </span>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-[10px] tracking-widest text-emerald-800 uppercase" style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+                from 사업계획서
+              </span>
+              <button
+                onClick={downloadChecklistExcel}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium bg-emerald-700 hover:bg-emerald-800 text-emerald-50 transition"
+                style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                엑셀 다운로드
+              </button>
+            </div>
           )}
         </div>
 
