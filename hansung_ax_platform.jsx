@@ -398,7 +398,13 @@ async function callClaude(systemContext, userPrompt, model) {
       } else {
         // 그 외 4xx/5xx = 실제 오류 → 즉시 중단
         const errText = await response.text();
-        throw new Error(`API 오류: ${response.status} ${errText.slice(0, 200)}`);
+        // 서버가 보낸 JSON에서 안내문(error 필드)만 깔끔하게 뽑아낸다.
+        let detail = errText.slice(0, 300);
+        try {
+          const j = JSON.parse(errText);
+          if (j && j.error) detail = typeof j.error === 'string' ? j.error : (j.error.message || detail);
+        } catch (e) { /* JSON이 아니면 원문 일부를 그대로 사용 */ }
+        throw new Error('API 오류: ' + detail);
       }
     } catch (e) {
       const msg = (e && e.message) ? e.message : String(e);
