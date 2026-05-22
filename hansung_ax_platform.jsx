@@ -28,7 +28,7 @@ const FONT_LINK = `
 const DEFAULT_TEXTS = {
   dashboard: {
     eyebrow: '01 · Overview',
-    title: '좋은 아침입니다, 기획처.',
+    title: '한성대학교 정부재정지원사업 통합관리시스템',
     description: '2026년 5월 21일 목요일 · 한성대학교 기획처 사업관리실 · 진행 중 사업 7건, 신규 공고 12건이 대기 중입니다.',
   },
   discovery: {
@@ -197,6 +197,80 @@ const SAMPLE_PLAN_TEXT =
 - 시설·장비비: 18억원 (20%)
 - 기타: 9억원 (10%)
 - 합계: 90억원`;
+
+/* ---------------- 사업계획서 샘플: SW중심대학 (실제 운영계획서 기반) ---------------- */
+const SAMPLE_PLAN_SW_TEXT =
+`[한성대학교 SW중심대학사업 2026학년도 사업 운영계획서]
+
+○ 사업명: SW중심대학 일반트랙
+○ 주관기관: 한성대학교
+○ 총괄책임자: OOO (부총장)
+○ 지원유형: 일반트랙 · 연차: 3차년도(2026년)
+○ 사업기간: 2024.05.01. ~ 2031.12.31. (7년 8개월)
+
+1. 교육목표 및 단계별 추진전략
+- 비전: 산업주도의 신기술 SW·AI 인재양성 선도대학
+- 목표: ① SW·AI 역량 증진 통합교육체계 구축 ② 산업수요 맞춤 실전형 SW 전문인재 양성
+  ③ 학문 전 분야 SW 융합 인재 양성 ④ SW교육의 지역사회 가치 확산
+- 단계별 추진: 1단계 기반조성(1~4차년도, '24.5~'28.2) / 2단계 성과창출(5~6차년도, '28.3~'30.2)
+  / 3단계 확산자립(7~8차년도, '30.3~'31.12)
+- 2026학년도(3차년도) 중점방향: 신기술 반영 교과목 신설·운영, Physical AI 주제 산학협력
+  해외연수(싱가포르·말레이시아), 전교생 생성형 AI 통합플랫폼(ChatGPT·Gemini·Claude) 도입,
+  신규 Micro Degree 3종 개설
+
+2. 2026학년도(3차년도) 공통 성과지표 목표치
+- 전체 계열 대비 SW정원 비율: 9.0%
+- 참여학과 교원 1인당 학생수: 20.5명
+- AI 기초교육 이수학생 비율: 72.0%
+- SW전공·융합과정 배출인원: 250명
+- 산학협력 프로젝트 참여율: 40.0%
+- 인턴십 이수율: 26.0%
+- SW전공생 취업률: 62.0%
+- 수혜학생 만족도: 4.2점 / 5.0점 만점
+
+3. 자율 성과지표 목표치 (3차년도)
+- Micro Degree 이수자 수: 150명
+- SW 창업 건수: 5건/년
+- 생성형 AI 플랫폼 활용학생 수: 2,000명
+- 오픈소스 SW 기여 학생 수: 60명
+- SW 가치확산 참여인원: 800명/년
+
+4. 사업수행 능력 및 추진체계
+- 참여학과: SW학과 3개(컴퓨터공학부, AI응용학과, 융합보안학과), 비SW학과 10개
+- 추진조직: SW·AI 교육본부, SW중심대학사업단, 교육과정혁신위원회, 성과관리위원회,
+  AI·SW융합교육센터, 산학협력센터
+- 우수 교수진: 산학협력중점교원 1명 신규 채용('26년), SW 전공 참여 교원 중 산업체 경력
+  5년 이상 교원 비율 40% 이상 유지
+- 교원 평가제도 개선: 교육업적평가 비중 강화(연구:교육:봉사 5:3:2 → 4:4:2 단계적 조정)
+- 대학 지원의지: 총장 직속 SW·AI 교육본부 운영, 대응투자금 30억원 매칭 이행
+
+5. 교육과정 개편·운영 계획
+- 2026학년도 신설 과목: 오픈소스 AI·SW 융합기초, 피지컬 AI 실습, 온디바이스 AI 응용,
+  생성형 AI 서비스 기획·개발, LLM 파인튜닝 실습, AI 기반 사이버보안 실습 등
+- 신규 Micro Degree 3종 개설: Physical AI 전문 MD, 안전·신뢰 AI 전문 MD,
+  온디바이스 인공지능 시스템 MD (각 12학점)
+- 기업주도 인턴십 전환: 사전교육 + 기업방문교육 + 프로젝트 수행 3단계 구조로 고도화
+- 학·석사 연계 패스트트랙: 학부 3.5년 + 석사 1.5년 = 5년 통합과정 운영
+- 전교생 AI기초교육: 모든 계열 신입생 대상 AI기초 필수 이수
+
+6. 재원확보 및 운용계획 (2026년도, 3차년도)
+- 사업비 총액: 2,510,565,745원 (이월금 510,565,745원 + 당해연도 2,000,000,000원)
+  · 인건비: 804,500,000원 (32.0%)
+  · 학생인건비: 34,000,000원 (1.4%)
+  · 연구시설·장비비: 270,900,000원 (10.8%)
+  · 연구활동비: 1,182,732,163원 (47.1%)
+  · 연구재료비: 69,336,582원 (2.8%)
+  · 연구수당: 149,097,000원 (5.9%)
+- 재원 구성: 정부지원금 연 약 20억원(약 83%) + 대학 대응투자금 연 약 3.75억원(약 17%)
+  = 연 약 23.75억원
+- 총 사업규모: 정부지원금 8년간 150억원, 대학 대응투자금 30억원 매칭`;
+
+/* ---------------- 사업별 샘플 사업계획서 매핑 (공고 id → 본문) ---------------- */
+// 등록된 샘플이 없는 사업(예: 서울시 RISE)은 키를 두지 않아 빈 값으로 처리된다.
+const SAMPLE_PLANS = {
+  'risc-2026': SAMPLE_PLAN_TEXT,
+  'sw-univ-2026': SAMPLE_PLAN_SW_TEXT,
+};
 
 /* ----------- 대학정보공시 실데이터 (공공데이터포털 대학알리미 OpenAPI) ----------- */
 /* hansung_disclosure.json — schlId 0000200 / 2024 공시 / data.go.kr OpenAPI 수집본 */
@@ -1184,6 +1258,12 @@ function PlanningDoubleCheck() {
   const [mode, setMode] = useState('disclosure'); // 'disclosure' | 'upload'
   const [projectId, setProjectId] = useState('risc-2026'); // 대상 사업 (수집된 공고 중 선택)
 
+  // 대상 사업 선택 시 해당 사업의 샘플 사업계획서를 본문에 불러온다 (없으면 빈 값).
+  function selectProject(id) {
+    setProjectId(id);
+    setPlanText(SAMPLE_PLANS[id] || '');
+  }
+
   // 대학정보공시 데이터 (OpenAPI 수집본 · 편집 가능)
   const [disclosureData, setDisclosureData] = useState(DISCLOSURE_RAW_DATA);
 
@@ -1377,7 +1457,7 @@ JSON 스키마만 출력하세요:
 
   return (
     <div>
-      <ProjectSelector selectedId={projectId} onSelect={setProjectId} />
+      <ProjectSelector selectedId={projectId} onSelect={selectProject} />
 
       {/* 데이터 출처 메뉴 */}
       <div className="flex items-center gap-1 mb-3 bg-stone-100 rounded p-1 w-fit">
@@ -1468,7 +1548,17 @@ JSON 스키마만 출력하세요:
             <span className="text-[10px] tracking-widest text-stone-500 uppercase"
               style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{planText.length}자</span>
           </div>
+          {planText.trim() === '' && (
+            <div className="m-3 mb-0 border border-stone-300 bg-stone-50 rounded px-4 py-3 flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-stone-500 shrink-0 mt-0.5" />
+              <div style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                <div className="text-sm font-medium text-stone-700">작성된 사업계획서가 없습니다.</div>
+                <div className="text-xs text-stone-500 mt-0.5">이 사업은 등록된 샘플 사업계획서가 없습니다. 아래에 직접 입력하거나 다른 사업을 선택하세요.</div>
+              </div>
+            </div>
+          )}
           <textarea value={planText} onChange={(e) => setPlanText(e.target.value)}
+            placeholder="여기에 사업계획서 본문을 직접 입력하세요..."
             className="w-full px-4 py-3 text-xs h-80 resize-none focus:outline-none leading-relaxed"
             style={{ fontFamily: 'IBM Plex Mono, monospace' }} />
         </div>
@@ -2112,6 +2202,12 @@ function OperationsView({ texts, setTexts, adminMode }) {
   const [planExpanded, setPlanExpanded] = useState(false);
   const [projectId, setProjectId] = useState('risc-2026'); // 대상 사업 (수집된 공고 중 선택)
 
+  // 대상 사업 선택 시 해당 사업의 샘플 사업계획서를 본문에 불러온다 (없으면 빈 값).
+  function selectProject(id) {
+    setProjectId(id);
+    setSubmittedPlan(SAMPLE_PLANS[id] || '');
+  }
+
   const [checklist, setChecklist] = useState(null);
   const [checkLoading, setCheckLoading] = useState(false);
   const [checkError, setCheckError] = useState(null);
@@ -2211,7 +2307,7 @@ JSON 스키마:
       <PageHeader pageKey="operations" texts={texts} setTexts={setTexts} adminMode={adminMode} />
 
       {/* 대상 사업 선택 */}
-      <ProjectSelector selectedId={projectId} onSelect={setProjectId} />
+      <ProjectSelector selectedId={projectId} onSelect={selectProject} />
 
       {/* 1) 제출된 사업계획서 입력 + 체크리스트 */}
       <section className="bg-white border border-stone-200 rounded mb-6">
@@ -2239,9 +2335,19 @@ JSON 스키마:
             </button>
           </div>
         </div>
+        {submittedPlan.trim() === '' && (
+          <div className="mx-5 mt-4 border border-stone-300 bg-stone-50 rounded px-4 py-3 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-stone-500 shrink-0 mt-0.5" />
+            <div style={{ fontFamily: 'IBM Plex Sans KR' }}>
+              <div className="text-sm font-medium text-stone-700">작성된 사업계획서가 없습니다.</div>
+              <div className="text-xs text-stone-500 mt-0.5">이 사업은 등록된 샘플 사업계획서가 없습니다. 아래에 직접 입력하거나 다른 사업을 선택하세요.</div>
+            </div>
+          </div>
+        )}
         <textarea
           value={submittedPlan}
           onChange={(e) => setSubmittedPlan(e.target.value)}
+          placeholder="여기에 제출된 사업계획서 본문을 직접 입력하세요..."
           className="w-full px-4 py-3 text-xs resize-none focus:outline-none leading-relaxed transition-all"
           style={{ fontFamily: 'IBM Plex Mono, monospace', height: planExpanded ? '24rem' : '8rem' }}
         />
