@@ -28,7 +28,7 @@ const FONT_LINK = `
 const DEFAULT_TEXTS = {
   dashboard: {
     eyebrow: '01 · Overview',
-    title: '한성대학교 정부재정지원사업 통합관리시스템',
+    title: '한성대학교 정부재정지원사업 AX 통합관리시스템',
     description: '2026년 5월 21일 목요일 · 한성대학교 기획처 사업관리실 · 진행 중 사업 7건, 신규 공고 12건이 대기 중입니다.',
   },
   discovery: {
