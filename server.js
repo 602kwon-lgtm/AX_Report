@@ -36,17 +36,23 @@ app.post('/api/claude', async (req, res) => {
   try {
     const { system, prompt, model } = req.body || {};
     const chosenModel = model === 'haiku' ? HAIKU_MODEL : MODEL;
-    const PER_ROUND = 8192;   // 라운드당 최대 출력 토큰
+    const PER_ROUND = 16000;  // 라운드당 최대 출력 토큰 (넉넉히 잡아 잘림 자체를 방지)
     const MAX_ROUNDS = 12;    // 안전 상한 (무한루프 방지)
 
-    // 에이전트 방식: 응답이 max_tokens로 잘리면, 부분응답을 assistant로 넣어
-    // 끊긴 지점부터 이어받기를 반복 → 완성된 전체 텍스트를 반환한다.
+    // 응답이 max_tokens로 잘리면, 부분응답을 assistant로 넣고 "이어쓰기"를
+    // 요청하는 user 메시지로 대화를 마무리해 다음 라운드를 호출한다.
+    // (일부 모델은 assistant 메시지로 끝나는 prefill을 지원하지 않으므로
+    //  대화는 반드시 user 메시지로 끝나야 한다.)
     let assistantSoFar = '';
     let lastStop = '';
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const messages = [{ role: 'user', content: prompt || '' }];
       if (assistantSoFar) {
         messages.push({ role: 'assistant', content: assistantSoFar.replace(/\s+$/, '') });
+        messages.push({
+          role: 'user',
+          content: '직전 응답이 출력 길이 제한으로 중간에 끊겼습니다. 새로운 인사말·설명·재시작 없이, 끊긴 바로 그 지점부터 나머지 내용을 그대로 이어서 출력하세요.',
+        });
       }
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
