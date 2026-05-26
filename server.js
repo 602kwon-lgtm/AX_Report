@@ -246,17 +246,46 @@ ${fileLines ? `[첨부파일]\n${fileLines}` : '[첨부파일] 없음'}
   };
 }
 
+// 공공데이터포털 게이트웨이는 간헐적으로 502/503/504를 뱉는다 (특히 해외 클라우드에서 호출 시).
+// 5xx·네트워크 오류는 일시적이라고 보고 점점 더 길게 기다리며 자동 재시도한다.
+const DATA_API_RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const DATA_API_RETRY_WAITS_MS = [2000, 5000, 10000, 20000];
+
 async function fetchAnnouncementsFromAPI() {
   const key = process.env.DATA_GO_KR_SERVICE_KEY;
   if (!key) throw new Error('DATA_GO_KR_SERVICE_KEY 환경변수가 비어있습니다.');
   // 가이드 문서 b) 요청 메시지 명세 기준: 소문자 serviceKey, URL Encode 적용
   const url = `${DATA_API_BASE}?serviceKey=${encodeURIComponent(key)}&pageNo=1&numOfRows=${DATA_API_ROWS}&returnType=json`;
-  const r = await fetch(url);
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`HTTP ${r.status} ${r.statusText}${text ? ` — ${text.slice(0, 300)}` : ''}`);
+
+  let lastInfo = '연결 실패';
+  let r = null;
+  let text = '';
+  for (let attempt = 0; attempt <= DATA_API_RETRY_WAITS_MS.length; attempt++) {
+    try {
+      r = await fetch(url);
+      text = await r.text();
+    } catch (e) {
+      lastInfo = '네트워크 오류: ' + (e.message || String(e));
+      if (attempt < DATA_API_RETRY_WAITS_MS.length) {
+        console.warn(`[공고 동기화 재시도 ${attempt + 1}/${DATA_API_RETRY_WAITS_MS.length}] ${lastInfo}`);
+        await sleep(DATA_API_RETRY_WAITS_MS[attempt]);
+        continue;
+      }
+      throw new Error(`공공데이터포털 연결 실패 (${DATA_API_RETRY_WAITS_MS.length + 1}회 시도). ${lastInfo}`);
+    }
+    if (r.ok) break;
+    // 일시적 오류면 재시도, 그 외(400·401 등 영구 오류)는 즉시 던진다.
+    if (DATA_API_RETRYABLE.has(r.status) && attempt < DATA_API_RETRY_WAITS_MS.length) {
+      lastInfo = `HTTP ${r.status} ${r.statusText}`;
+      console.warn(`[공고 동기화 재시도 ${attempt + 1}/${DATA_API_RETRY_WAITS_MS.length}] ${lastInfo} — ${Math.round(DATA_API_RETRY_WAITS_MS[attempt] / 1000)}초 후 재시도`);
+      await sleep(DATA_API_RETRY_WAITS_MS[attempt]);
+      continue;
+    }
+    // 영구 오류 또는 재시도 한도 초과
+    const body = (text || '').slice(0, 200);
+    throw new Error(`공공데이터포털 일시 장애 — HTTP ${r.status} ${r.statusText}${body ? ` (${body})` : ''}. 잠시 후 다시 시도하거나 06시 자동 동기화를 기다려주세요.`);
   }
-  const text = await r.text();
+
   let data;
   try { data = JSON.parse(text); }
   catch { throw new Error(`JSON 파싱 실패. 응답 앞 300자: ${text.slice(0, 300)}`); }
