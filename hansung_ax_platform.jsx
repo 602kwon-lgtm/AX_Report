@@ -73,6 +73,9 @@ const DEFAULT_PROFILE = {
 };
 
 /* ---------------- 실제 공고 카드 (사용자 제공 PDF 기반) ---------------- */
+// 시연용 폴백 데이터. 서버의 /api/announcements가 비어있거나 실패할 때 화면이
+// 비어 보이지 않도록 사용한다. 실제 운영 시에는 공공데이터포털에서 매일 자동
+// 수집된 announcements.json의 내용으로 대체된다.
 const MOCK_ANNOUNCEMENTS = [
   {
     id: 'sw-univ-2026',
@@ -157,6 +160,75 @@ const MOCK_ANNOUNCEMENTS = [
 [추진일정] 신청 6.15까지, 평가 7월, 협약 8월`,
   },
 ];
+
+/* ---------------- 공고 자동 수집 데이터 훅 ---------------- */
+// 서버 `/api/announcements`에서 매일 1회 갱신된 공고 목록을 가져온다.
+// 모듈 단위 캐시로 같은 페이지의 여러 컴포넌트가 같은 결과를 공유하며,
+// 관리자가 수동 동기화를 실행하면 모든 구독 컴포넌트가 자동으로 다시 렌더된다.
+let _annCache = null;
+let _annInflight = null;
+const _annListeners = new Set();
+
+function _publishAnnouncements(data) {
+  _annCache = data;
+  _annListeners.forEach((cb) => { try { cb(data); } catch {} });
+}
+
+function fetchAnnouncementsOnce() {
+  if (_annCache) return Promise.resolve(_annCache);
+  if (_annInflight) return _annInflight;
+  _annInflight = fetch('/api/announcements')
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((data) => {
+      _annInflight = null;
+      _publishAnnouncements(data);
+      return data;
+    });
+  return _annInflight;
+}
+
+async function refreshAnnouncements() {
+  _annCache = null;
+  _annInflight = null;
+  return fetchAnnouncementsOnce();
+}
+
+function useAnnouncements() {
+  const [data, setData] = useState(_annCache);
+
+  useEffect(() => {
+    const cb = (d) => setData(d);
+    _annListeners.add(cb);
+    if (_annCache) setData(_annCache);
+    else fetchAnnouncementsOnce();
+    return () => { _annListeners.delete(cb); };
+  }, []);
+
+  const apiItems = data && Array.isArray(data.items) ? data.items : [];
+  // API 데이터가 비어있을 때는 시연용 MOCK으로 폴백 — 화면이 빈 상태로 보이지 않게.
+  const list = apiItems.length > 0 ? apiItems : MOCK_ANNOUNCEMENTS;
+
+  return {
+    list,
+    isLive: apiItems.length > 0,
+    lastSyncedAt: (data && data.lastSyncedAt) || null,
+    totalCount: (data && data.totalCount) || list.length,
+    source: (data && data.source) || null,
+    lastSyncError: (data && data.lastSyncError) || null,
+    refresh: refreshAnnouncements,
+  };
+}
+
+// 마지막 수집 시각을 사람이 읽기 좋은 형태로 변환 (예: "2026-05-26 14:08")
+function formatSyncTime(iso) {
+  if (!iso) return '아직 없음';
+  try {
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return iso; }
+}
 
 /* ---------------- 사업계획서 샘플 (계획·운영 공용) ---------------- */
 const SAMPLE_PLAN_TEXT =
@@ -585,8 +657,12 @@ function SeverityDot({ severity }) {
 }
 
 /* ==================== 대상 사업 선택기 (계획·운영 공용) ==================== */
-// 수집된 공고(MOCK_ANNOUNCEMENTS) 중 작업 대상 사업을 고르는 검정 배경 선택기.
+// 수집된 공고 중 작업 대상 사업을 고르는 검정 배경 선택기.
+// 공공데이터포털에서 자동 수집된 항목을 우선 사용하고, 비어있으면 MOCK으로 폴백한다.
 function ProjectSelector({ selectedId, onSelect }) {
+  const { list, isLive, lastSyncedAt } = useAnnouncements();
+  // 너무 길어지지 않도록 최신 12건만 그리드에 노출 (전체는 모색 탭에서 확인)
+  const visible = list.slice(0, 12);
   return (
     <div className="bg-stone-900 text-stone-100 rounded p-4 mb-6">
       <div className="flex items-center gap-2 mb-3">
@@ -596,11 +672,12 @@ function ProjectSelector({ selectedId, onSelect }) {
           대상 사업 선택 · Target Project
         </span>
         <span className="text-[11px] text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-          — 수집된 공고 {MOCK_ANNOUNCEMENTS.length}건 중 선택하세요
+          — {isLive ? '자동 수집' : '시연 데이터'} {list.length}건 중 최신 {visible.length}건
+          {isLive && lastSyncedAt ? ` · ${formatSyncTime(lastSyncedAt)} 수집` : ''}
         </span>
       </div>
       <div className="grid grid-cols-3 gap-2">
-        {MOCK_ANNOUNCEMENTS.map((a) => {
+        {visible.map((a) => {
           const on = a.id === selectedId;
           return (
             <button
@@ -969,6 +1046,10 @@ function DiscoveryView({ texts, setTexts, adminMode }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // 자동 수집된 공고 목록 (서버 /api/announcements)
+  const { list: announcements, isLive, lastSyncedAt, totalCount, lastSyncError, refresh } = useAnnouncements();
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   const profileText = Object.entries(profile).map(([k, v]) => `- ${k}: ${v}`).join('\n');
 
@@ -991,7 +1072,29 @@ ${profileText}
   "추천행동": "..."
 }`;
 
-  const selectedAnnouncement = MOCK_ANNOUNCEMENTS.find((a) => a.id === selectedId);
+  const selectedAnnouncement = announcements.find((a) => a.id === selectedId);
+
+  // 관리자용 즉시 동기화 — 새벽 06시 cron을 기다리지 않고 바로 새 데이터를 받아온다.
+  // 관리자 비밀번호는 잠금 해제 시 보관된 getAIPassword()를 그대로 사용한다.
+  async function handleManualSync() {
+    if (syncing) return;
+    setSyncing(true); setSyncMsg(null);
+    try {
+      const r = await fetch('/api/announcements/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: getAIPassword() }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { setSyncMsg({ type: 'err', text: data.error || `동기화 실패 (HTTP ${r.status})` }); return; }
+      await refresh();
+      setSyncMsg({ type: 'ok', text: `${data.count || 0}건 갱신 완료` });
+    } catch (e) {
+      setSyncMsg({ type: 'err', text: '동기화 중 오류: ' + (e.message || e) });
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function runAnalysis() {
     setLoading(true);
@@ -1067,19 +1170,51 @@ ${profileText}
         {/* 우측: 공고 리스트 */}
         <div className="col-span-2">
           <div className="bg-white border border-stone-200 rounded">
-            <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-stone-900" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-                수집된 공고 ({MOCK_ANNOUNCEMENTS.length}건)
-              </h3>
-              <button
-                onClick={() => { setUseCustom(true); setSelectedId(null); setResult(null); }}
-                className="text-xs text-rose-800 hover:text-rose-950 flex items-center gap-1"
-                style={{ fontFamily: 'IBM Plex Sans KR' }}>
-                <FileText className="w-3 h-3" /> 직접 공고문 입력
-              </button>
+            <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-semibold text-stone-900" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                  수집된 공고 ({announcements.length}건)
+                </h3>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide ${
+                  isLive ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'
+                }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+                  {isLive ? 'LIVE · data.go.kr' : 'DEMO · 시연 데이터'}
+                </span>
+                <span className="text-[11px] text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                  마지막 수집 {formatSyncTime(lastSyncedAt)}
+                  {isLive && totalCount > announcements.length ? ` · 전체 ${totalCount}건 중 최신 ${announcements.length}건` : ''}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                {adminMode && (
+                  <button
+                    onClick={handleManualSync}
+                    disabled={syncing}
+                    className="text-xs text-stone-600 hover:text-stone-900 disabled:text-stone-300 flex items-center gap-1"
+                    style={{ fontFamily: 'IBM Plex Sans KR' }}
+                    title="공공데이터포털에서 즉시 새 공고를 가져옵니다.">
+                    {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    {syncing ? '동기화 중' : '지금 새로고침'}
+                  </button>
+                )}
+                <button
+                  onClick={() => { setUseCustom(true); setSelectedId(null); setResult(null); }}
+                  className="text-xs text-rose-800 hover:text-rose-950 flex items-center gap-1"
+                  style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                  <FileText className="w-3 h-3" /> 직접 공고문 입력
+                </button>
+              </div>
             </div>
+            {(syncMsg || lastSyncError) && (
+              <div className={`px-5 py-2 text-[11px] border-b border-stone-100 ${
+                (syncMsg && syncMsg.type === 'ok') ? 'bg-emerald-50 text-emerald-900'
+                  : 'bg-amber-50 text-amber-900'
+              }`} style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                {syncMsg ? syncMsg.text : `최근 동기화 오류: ${lastSyncError.message}`}
+              </div>
+            )}
             <ul className="divide-y divide-stone-100">
-              {MOCK_ANNOUNCEMENTS.map((a) => {
+              {announcements.map((a) => {
                 const active = !useCustom && selectedId === a.id;
                 return (
                   <li key={a.id}
@@ -1757,10 +1892,20 @@ JSON 스키마만 출력하세요:
 
 /* ----------------- 계획: 작성 보조 (신규) ----------------- */
 function PlanningAssist() {
-  // 공고문은 SW중심대학을 기본 예시로
-  const defaultAnn = MOCK_ANNOUNCEMENTS[0].fullText;
-  const [announcement, setAnnouncement] = useState(defaultAnn);
-  const [projectId, setProjectId] = useState(MOCK_ANNOUNCEMENTS[0].id); // 대상 사업 선택
+  // 공고 목록은 자동 수집본을 우선 사용 (없을 땐 MOCK으로 폴백)
+  const { list: annList } = useAnnouncements();
+  const [announcement, setAnnouncement] = useState(annList[0]?.fullText || '');
+  const [projectId, setProjectId] = useState(annList[0]?.id || ''); // 대상 사업 선택
+
+  // 공고 목록이 늦게 로드되거나 동기화로 바뀌었을 때, 선택된 항목이 유효한지 보정
+  useEffect(() => {
+    if (!annList.length) return;
+    const stillValid = annList.find((x) => x.id === projectId);
+    if (!stillValid) {
+      setProjectId(annList[0].id);
+      setAnnouncement(annList[0].fullText || '');
+    }
+  }, [annList, projectId]);
 
   // 1. 필수 작성 항목
   const [outline, setOutline] = useState(null);
@@ -1896,7 +2041,7 @@ JSON 스키마:
   // 대상 사업 선택 시 공고문 전문을 자동 입력 (이후 직접 편집 가능)
   function selectProject(id) {
     setProjectId(id);
-    const a = MOCK_ANNOUNCEMENTS.find((x) => x.id === id);
+    const a = annList.find((x) => x.id === id);
     if (a) setAnnouncement(a.fullText);
   }
 

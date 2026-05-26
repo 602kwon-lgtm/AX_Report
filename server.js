@@ -1,11 +1,13 @@
 // 한성대 AX 플랫폼 서버
 // 1) 빌드된 React 앱(dist/)을 정적 서빙
 // 2) /api/claude 경로로 Anthropic API를 안전하게 중계 (API 키는 서버 환경변수에만 보관)
+// 3) 공공데이터포털 「과학기술정보통신부_사업공고」를 매일 1회 자동 수집하여 announcements.json에 저장
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cron from 'node-cron';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -182,6 +184,201 @@ app.post('/api/texts', (req, res) => {
     return res.status(500).json({ error: '문구 저장 실패: ' + String(e) });
   }
 });
+
+// ─────────────────────────────────────────────
+// ── 공공데이터포털「과학기술정보통신부_사업공고」자동 수집 ──
+// 매일 06:00 KST에 1회 호출 → announcements.json에 저장
+// 프론트의 '모색(Discovery)' 화면이 이 파일을 읽어 공고 목록을 표시한다.
+// ─────────────────────────────────────────────
+const ANNOUNCEMENTS_FILE = path.join(__dirname, 'announcements.json');
+const DATA_API_BASE = 'http://apis.data.go.kr/1721000/msitannouncementinfo/businessAnnouncMentList';
+const DATA_API_ROWS = 100;   // 한 번에 받아올 공고 수 (최신 N건)
+
+// 사업공고 API의 viewUrl에서 nttSeqNo를 추출해 안정적인 id로 사용한다.
+function extractNttSeqNo(viewUrl) {
+  if (!viewUrl) return null;
+  const m = String(viewUrl).match(/nttSeqNo=(\d+)/);
+  return m ? m[1] : null;
+}
+
+// API 응답의 한 항목을 프론트가 쓰는 형식으로 변환한다.
+// (UI는 MOCK_ANNOUNCEMENTS의 필드를 그대로 기대하므로 같은 키 이름을 맞춰준다.)
+function mapApiItem(item, index) {
+  const seq = extractNttSeqNo(item.viewUrl) || `idx-${index}`;
+  // files도 응답 구조가 변종이 많아 안전하게 정규화한다:
+  //   배열 그대로 | {file: [...]} | {file: {...}} | 항목별 fileName/fileUrl 단일
+  //   또한 각 항목이 {file: {...}}로 한번 더 감싸진 경우(공공데이터포털 특유)도 풀어준다.
+  let filesRaw = Array.isArray(item.files) ? item.files
+              : (item.files && item.files.file)
+                  ? (Array.isArray(item.files.file) ? item.files.file : [item.files.file])
+                  : (item.fileName ? [{ fileName: item.fileName, fileUrl: item.fileUrl }] : []);
+  const files = filesRaw.map((f) => (f && f.file) ? f.file : f).filter(Boolean);
+  const fileLines = files
+    .filter((f) => f && f.fileName)
+    .map((f) => `  - ${f.fileName}${f.fileUrl ? `\n    ${f.fileUrl}` : ''}`)
+    .join('\n');
+  const summary = [item.deptName, item.managerName].filter(Boolean).join(' · ') || '담당부서 정보 없음';
+  const fullText =
+`[게시물 제목] ${item.subject || '(제목 없음)'}
+[게시일] ${item.pressDt || '-'}
+[담당부서] ${item.deptName || '-'}
+[담당자] ${item.managerName || '-'}${item.managerTel ? ` (${item.managerTel})` : ''}
+[상세 페이지] ${item.viewUrl || '-'}
+${fileLines ? `[첨부파일]\n${fileLines}` : '[첨부파일] 없음'}
+
+※ 이 정보는 공공데이터포털 「과학기술정보통신부_사업공고」 API에서 자동 수집된 메타데이터입니다.
+   상세 공고 본문(지원자격·예산·일정 등)은 위 상세 페이지 또는 첨부파일에서 확인해주세요.`;
+
+  return {
+    id: `msit-${seq}`,
+    title: item.subject || '(제목 없음)',
+    agency: '과학기술정보통신부',
+    deadline: '상세 페이지 확인',
+    budget: '상세 페이지 확인',
+    tag: '신규',
+    summary,
+    fullText,
+    // 추가 메타 (UI에서 부분적으로 활용)
+    pressDt: item.pressDt || '',
+    viewUrl: item.viewUrl || '',
+    deptName: item.deptName || '',
+    files,
+  };
+}
+
+async function fetchAnnouncementsFromAPI() {
+  const key = process.env.DATA_GO_KR_SERVICE_KEY;
+  if (!key) throw new Error('DATA_GO_KR_SERVICE_KEY 환경변수가 비어있습니다.');
+  // 가이드 문서 b) 요청 메시지 명세 기준: 소문자 serviceKey, URL Encode 적용
+  const url = `${DATA_API_BASE}?serviceKey=${encodeURIComponent(key)}&pageNo=1&numOfRows=${DATA_API_ROWS}&returnType=json`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status} ${r.statusText}${text ? ` — ${text.slice(0, 300)}` : ''}`);
+  }
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error(`JSON 파싱 실패. 응답 앞 300자: ${text.slice(0, 300)}`); }
+
+  // 실제 응답 구조 (공공데이터포털 특유의 XML→JSON 변환 결과):
+  //   { "response": [ {"header": {...}}, {"body": {"items": [{"item": {...}}, ...], "totalCount": N}} ] }
+  // header/body가 배열 안에 들어있고, 각 item은 {item: {...}}로 한 번 더 감싸져 있다.
+  // 일부 환경에서는 object 형태({response:{header,body}})로 올 수도 있어 둘 다 지원한다.
+  let header = {}, body = {};
+  const resp = data.response;
+  if (Array.isArray(resp)) {
+    for (const part of resp) {
+      if (part && part.header) header = part.header;
+      if (part && part.body) body = part.body;
+    }
+  } else if (resp && typeof resp === 'object') {
+    header = resp.header || {};
+    body = resp.body || {};
+  }
+  if (header.resultCode && header.resultCode !== '00') {
+    throw new Error(`API 오류 ${header.resultCode}: ${header.resultMsg || ''}`);
+  }
+
+  // items도 다양한 형태로 올 수 있다 — 배열, 단일 객체, {item: [...]}, {item: {...}}
+  let rawItems = body.items;
+  if (rawItems && rawItems.item) rawItems = rawItems.item;
+  if (!rawItems) rawItems = [];
+  if (!Array.isArray(rawItems)) rawItems = [rawItems];
+
+  // 각 항목이 {item: {...}}로 감싸진 경우 한 단계 벗긴다.
+  const unwrapped = rawItems.map((x) => (x && x.item) ? x.item : x);
+
+  const mapped = unwrapped.map((it, i) => mapApiItem(it, i));
+  return {
+    items: mapped,
+    totalCount: Number(body.totalCount) || mapped.length,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function readAnnouncementsFile() {
+  try {
+    if (fs.existsSync(ANNOUNCEMENTS_FILE)) {
+      return JSON.parse(fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('announcements.json 읽기 실패:', e);
+  }
+  return null;
+}
+
+function writeAnnouncementsFile(data) {
+  try {
+    fs.writeFileSync(ANNOUNCEMENTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('announcements.json 쓰기 실패:', e);
+    return false;
+  }
+}
+
+let lastSyncError = null;
+async function runSync(label = 'manual') {
+  try {
+    const result = await fetchAnnouncementsFromAPI();
+    writeAnnouncementsFile({
+      lastSyncedAt: result.fetchedAt,
+      source: 'data.go.kr · msitannouncementinfo',
+      totalCount: result.totalCount,
+      count: result.items.length,
+      items: result.items,
+    });
+    lastSyncError = null;
+    console.log(`[공고 동기화 · ${label}] ${result.items.length}건 저장 (전체 ${result.totalCount}건 중 최신)`);
+    return { ok: true, count: result.items.length, totalCount: result.totalCount };
+  } catch (e) {
+    lastSyncError = { message: String(e.message || e), at: new Date().toISOString() };
+    console.error(`[공고 동기화 실패 · ${label}]`, e.message || e);
+    return { ok: false, error: lastSyncError.message };
+  }
+}
+
+// ── 공개 라우트: 저장된 공고 목록 조회 ──
+app.get('/api/announcements', (req, res) => {
+  const data = readAnnouncementsFile();
+  if (!data) {
+    return res.json({
+      items: [],
+      lastSyncedAt: null,
+      lastSyncError,
+      message: '아직 수집된 공고가 없습니다. 잠시 후 다시 확인해주세요.',
+    });
+  }
+  return res.json({
+    items: data.items || [],
+    lastSyncedAt: data.lastSyncedAt || null,
+    totalCount: data.totalCount || (data.items || []).length,
+    source: data.source || null,
+    lastSyncError,
+  });
+});
+
+// ── 관리자 라우트: 즉시 동기화 (cron을 기다리지 않고 수동 실행) ──
+app.post('/api/announcements/sync', async (req, res) => {
+  if (!process.env.password || !req.body || req.body.password !== process.env.password) {
+    return res.status(401).json({ error: '관리자 인증이 필요합니다. 비밀번호가 올바르지 않습니다.' });
+  }
+  const result = await runSync('manual-admin');
+  if (!result.ok) return res.status(502).json({ error: result.error });
+  return res.json(result);
+});
+
+// 매일 06:00 KST 자동 동기화
+cron.schedule('0 6 * * *', () => { runSync('cron-daily-06KST'); }, { timezone: 'Asia/Seoul' });
+
+// 서버 부팅 시: announcements.json이 없으면 즉시 1회 수집 (실패해도 서버 가동에는 영향 없음)
+// 키가 비어있으면 시도조차 하지 않고 안내 로그만 남긴다.
+if (!process.env.DATA_GO_KR_SERVICE_KEY) {
+  console.warn('[공고 자동수집] DATA_GO_KR_SERVICE_KEY 미설정 — 수집을 건너뜁니다. .env에 키를 설정하세요.');
+} else if (!fs.existsSync(ANNOUNCEMENTS_FILE)) {
+  runSync('boot-initial');
+}
 
 // ── 빌드된 React 앱 정적 서빙 ──
 app.use(express.static(path.join(__dirname, 'dist')));
