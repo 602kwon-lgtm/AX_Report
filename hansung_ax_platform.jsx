@@ -206,14 +206,19 @@ function useAnnouncements() {
   }, []);
 
   const apiItems = data && Array.isArray(data.items) ? data.items : [];
-  // API 데이터가 비어있을 때는 시연용 MOCK으로 폴백 — 화면이 빈 상태로 보이지 않게.
-  const list = apiItems.length > 0 ? apiItems : MOCK_ANNOUNCEMENTS;
+  // 시연용 핵심 사업 3건(SW중심대학·서울RISE·학사구조혁신)은 항상 맨 위에 고정 노출한다.
+  // 한성대 입장에서 가장 자주 다루는 공고라 기본값으로 둔다.
+  // API에서 들어온 실시간 공고는 그 뒤에 붙는다.
+  const sampleItems = MOCK_ANNOUNCEMENTS.map((a) => ({ ...a, _isSample: true }));
+  const list = [...sampleItems, ...apiItems];
 
   return {
     list,
+    sampleCount: sampleItems.length,
+    liveCount: apiItems.length,
     isLive: apiItems.length > 0,
     lastSyncedAt: (data && data.lastSyncedAt) || null,
-    totalCount: (data && data.totalCount) || list.length,
+    totalCount: (data && data.totalCount) || apiItems.length,
     source: (data && data.source) || null,
     lastSyncError: (data && data.lastSyncError) || null,
     refresh: refreshAnnouncements,
@@ -660,8 +665,8 @@ function SeverityDot({ severity }) {
 // 수집된 공고 중 작업 대상 사업을 고르는 검정 배경 선택기.
 // 공공데이터포털에서 자동 수집된 항목을 우선 사용하고, 비어있으면 MOCK으로 폴백한다.
 function ProjectSelector({ selectedId, onSelect }) {
-  const { list, isLive, lastSyncedAt } = useAnnouncements();
-  // 너무 길어지지 않도록 최신 12건만 그리드에 노출 (전체는 모색 탭에서 확인)
+  const { list, isLive, lastSyncedAt, sampleCount, liveCount } = useAnnouncements();
+  // 너무 길어지지 않도록 최대 12건만 그리드에 노출 (샘플 3건은 항상 포함)
   const visible = list.slice(0, 12);
   return (
     <div className="bg-stone-900 text-stone-100 rounded p-4 mb-6">
@@ -672,7 +677,7 @@ function ProjectSelector({ selectedId, onSelect }) {
           대상 사업 선택 · Target Project
         </span>
         <span className="text-[11px] text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-          — {isLive ? '자동 수집' : '시연 데이터'} {list.length}건 중 최신 {visible.length}건
+          — 핵심 사업 {sampleCount}건 + 자동 수집 {liveCount}건 (표시 {visible.length}건)
           {isLive && lastSyncedAt ? ` · ${formatSyncTime(lastSyncedAt)} 수집` : ''}
         </span>
       </div>
@@ -691,9 +696,17 @@ function ProjectSelector({ selectedId, onSelect }) {
               style={{ fontFamily: 'IBM Plex Sans KR' }}
             >
               <div className="flex items-center justify-between gap-2 mb-1.5">
-                <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium tracking-wide ${
-                  on ? 'bg-rose-900 text-rose-50' : 'bg-stone-700 text-stone-300'
-                }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{a.tag}</span>
+                <div className="flex items-center gap-1">
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium tracking-wide ${
+                    on ? 'bg-rose-900 text-rose-50' : 'bg-stone-700 text-stone-300'
+                  }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{a.tag}</span>
+                  {a._isSample && (
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium tracking-wide ${
+                      on ? 'bg-amber-200 text-amber-950' : 'bg-amber-900/30 text-amber-200 border border-amber-700/40'
+                    }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}
+                      title="시연용 핵심 사업">샘플</span>
+                  )}
+                </div>
                 {on
                   ? <CheckCircle2 className="w-4 h-4 text-rose-800" />
                   : <span className="w-4 h-4 rounded-full border border-stone-600" />}
@@ -1047,7 +1060,8 @@ function DiscoveryView({ texts, setTexts, adminMode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // 자동 수집된 공고 목록 (서버 /api/announcements)
-  const { list: announcements, isLive, lastSyncedAt, totalCount, lastSyncError, refresh } = useAnnouncements();
+  // 상단 3건은 시연용 핵심 사업(샘플), 그 뒤는 실시간 자동 수집분.
+  const { list: announcements, isLive, lastSyncedAt, totalCount, liveCount, sampleCount, lastSyncError, refresh } = useAnnouncements();
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
 
@@ -1181,8 +1195,9 @@ ${profileText}
                   {isLive ? 'LIVE · data.go.kr' : 'DEMO · 시연 데이터'}
                 </span>
                 <span className="text-[11px] text-stone-500" style={{ fontFamily: 'IBM Plex Sans KR' }}>
-                  마지막 수집 {formatSyncTime(lastSyncedAt)}
-                  {isLive && totalCount > announcements.length ? ` · 전체 ${totalCount}건 중 최신 ${announcements.length}건` : ''}
+                  핵심 사업 {sampleCount}건 + 자동 수집 {liveCount}건
+                  {isLive ? ` · 마지막 수집 ${formatSyncTime(lastSyncedAt)}` : ''}
+                  {isLive && totalCount > liveCount ? ` (전체 ${totalCount}건 중)` : ''}
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -1224,14 +1239,24 @@ ${profileText}
                       <h4 className="text-sm font-medium leading-snug" style={{ fontFamily: 'IBM Plex Sans KR' }}>
                         {a.title}
                       </h4>
-                      <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium tracking-wide ${
-                        active ? 'bg-stone-700 text-stone-100' :
-                        a.tag === '대형' ? 'bg-rose-100 text-rose-900' :
-                        a.tag === '핵심' ? 'bg-amber-100 text-amber-900' :
-                        'bg-stone-100 text-stone-700'
-                      }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
-                        {a.tag}
-                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {a._isSample && (
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium tracking-wide ${
+                            active ? 'bg-amber-300 text-amber-950' : 'bg-amber-50 text-amber-800 border border-amber-200'
+                          }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}
+                            title="시연용 핵심 사업 (한성대 자주 다루는 공고)">
+                            샘플
+                          </span>
+                        )}
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium tracking-wide ${
+                          active ? 'bg-stone-700 text-stone-100' :
+                          a.tag === '대형' ? 'bg-rose-100 text-rose-900' :
+                          a.tag === '핵심' ? 'bg-amber-100 text-amber-900' :
+                          'bg-stone-100 text-stone-700'
+                        }`} style={{ fontFamily: 'IBM Plex Mono, monospace' }}>
+                          {a.tag}
+                        </span>
+                      </div>
                     </div>
                     <div className={`text-xs mb-2 ${active ? 'text-stone-300' : 'text-stone-500'}`}
                       style={{ fontFamily: 'IBM Plex Sans KR' }}>
