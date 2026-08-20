@@ -1,13 +1,15 @@
 // 한성대 AX 플랫폼 서버
 // 1) 빌드된 React 앱(dist/)을 정적 서빙
 // 2) /api/claude 경로로 Anthropic API를 안전하게 중계 (API 키는 서버 환경변수에만 보관)
-// 3) 공공데이터포털 「과학기술정보통신부_사업공고」를 매일 1회 자동 수집하여 announcements.json에 저장
+// 3) 공공데이터포털 「과학기술정보통신부_사업공고」 + 교육부 홈페이지 「사업공고」 게시판을
+//    매일 1회 자동 수집하여 announcements.json에 저장
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
+import * as XLSX from 'xlsx';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -195,12 +197,14 @@ const DATA_API_BASE = 'http://apis.data.go.kr/1721000/msitannouncementinfo/busin
 const DATA_API_ROWS = 500;   // 한 번에 받아올 공고 수 (최신 N건). 대학 키워드 필터링 후 남는 건수가
                               // 적기 때문에(대학 대상 공고는 전체 중 일부) 넉넉히 받아온다.
 
-// 이 API는 과기정통부의 모든 사업공고(개인 모집·기업 대상 지정·연구과제 공모 등)를
-// 구분 없이 반환하며, 신청대상을 나타내는 별도 필드가 없다(공공데이터포털 명세 확인 결과).
-// 따라서 제목에 "대학" 키워드가 포함된 공고만 대학 대상 공고로 간주해 1차 필터링한다.
+// 두 소스(과기정통부·교육부) 모두 신청대상을 나타내는 별도 필드가 없고, 개인 모집·기업
+// 대상 지정·용역 입찰 등 대학과 무관한 공고가 섞여 있다. 제목에 "대학" 키워드가 포함된
+// 공고만 대학 대상 공고로 간주해 1차 필터링한다.
+function isUniversityTitle(title) {
+  return String(title || '').includes('대학');
+}
 function isUniversityAnnouncement(item) {
-  const subject = String(item && item.subject || '');
-  return subject.includes('대학');
+  return isUniversityTitle(item && item.subject);
 }
 
 // 사업공고 API의 viewUrl에서 nttSeqNo를 추출해 안정적인 id로 사용한다.
@@ -338,6 +342,91 @@ async function fetchAnnouncementsFromAPI() {
   };
 }
 
+// ── 교육부 홈페이지 「사업공고」 게시판 자동 수집 ──
+// 교육부는 data.go.kr에 실시간 조회용 OpenAPI를 제공하지 않는다. 다만 moe.go.kr
+// 게시판이 "엑셀 다운로드" 버튼으로 최신 100건을 xlsx로 내려주므로 이를 이용한다.
+// 다운로드 라우트는 목록 검색 페이지의 세션 상태를 참조하므로, 목록 페이지를 먼저
+// 한 번 방문해 세션 쿠키를 확보한 뒤 같은 쿠키로 엑셀을 요청해야 정상 데이터가 온다.
+const MOE_BOARD_ID = '72761';   // 교육부 홈페이지 "사업공고" 게시판 ID
+const MOE_LIST_URL = `https://www.moe.go.kr/boardCnts/listRenew.do?boardID=${MOE_BOARD_ID}&m=020502&s=moe`;
+const MOE_EXCEL_URL = `https://www.moe.go.kr/boardCnts/boardExcelDown.do?boardID=${MOE_BOARD_ID}&m=020502&s=moe`;
+const MOE_UA = 'Mozilla/5.0 (compatible; HansungAXPlatform/1.0)';
+
+function extractBoardSeq(viewUrl) {
+  if (!viewUrl) return null;
+  const m = String(viewUrl).match(/boardSeq=(\d+)/);
+  return m ? m[1] : null;
+}
+
+// 게시판 원문에 섞여 나오는 HTML 엔티티·중복 공백을 정리한다.
+function cleanText(s) {
+  return String(s || '').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// 교육부 엑셀의 한 행을 프론트가 쓰는 공고 형식으로 변환한다 (mapApiItem과 같은 키 이름).
+function mapMoeRow(row) {
+  const seq = extractBoardSeq(row['URL']) || `row-${row['번호']}`;
+  const title = cleanText(row['제목']) || '(제목 없음)';
+  const fullText =
+`[게시물 제목] ${title}
+[게시일] ${row['등록일'] || '-'}
+[등록자] ${row['등록자'] || '-'}
+[상세 페이지] ${row['URL'] || '-'}
+[첨부파일] ${row['첨부파일명'] || '없음'}
+
+※ 이 정보는 교육부 홈페이지 「사업공고」 게시판에서 자동 수집된 메타데이터입니다.
+   상세 공고 본문(지원자격·예산·일정 등)은 위 상세 페이지 또는 첨부파일에서 확인해주세요.`;
+
+  return {
+    id: `moe-${seq}`,
+    title,
+    agency: '교육부',
+    deadline: '상세 페이지 확인',
+    budget: '상세 페이지 확인',
+    tag: '신규',
+    summary: row['등록자'] ? `교육부 · ${row['등록자']}` : '교육부',
+    fullText,
+    pressDt: row['등록일'] || '',
+    viewUrl: row['URL'] || '',
+    deptName: '교육부',
+    files: row['첨부파일명'] ? [{ fileName: row['첨부파일명'] }] : [],
+  };
+}
+
+function getCookieHeader(res) {
+  if (typeof res.headers.getSetCookie === 'function') {
+    return res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  }
+  // 구버전 Node 폴백. 이 두 쿠키(JSESSIONID·clientid)는 Expires 속성이 없어 콤마로
+  // 안전하게 분리할 수 있음을 확인했다.
+  return (res.headers.get('set-cookie') || '')
+    .split(',').map((c) => c.split(';')[0].trim()).filter(Boolean).join('; ');
+}
+
+async function fetchMoeAnnouncementsFromExcel() {
+  const listRes = await fetch(MOE_LIST_URL, { headers: { 'User-Agent': MOE_UA } });
+  if (!listRes.ok) throw new Error(`교육부 목록 페이지 접근 실패 — HTTP ${listRes.status}`);
+  const cookie = getCookieHeader(listRes);
+
+  const excelRes = await fetch(MOE_EXCEL_URL, {
+    headers: { 'User-Agent': MOE_UA, Cookie: cookie, Referer: MOE_LIST_URL },
+  });
+  if (!excelRes.ok) throw new Error(`교육부 공고 엑셀 다운로드 실패 — HTTP ${excelRes.status}`);
+  const buf = Buffer.from(await excelRes.arrayBuffer());
+
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  if (rows.length === 0) throw new Error('교육부 공고 엑셀이 비어있습니다 (세션 만료 가능성).');
+
+  const university = rows.filter((r) => isUniversityTitle(r['제목']));
+  return {
+    items: university.map(mapMoeRow),
+    totalCount: rows.length,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 function readAnnouncementsFile() {
   try {
     if (fs.existsSync(ANNOUNCEMENTS_FILE)) {
@@ -360,24 +449,48 @@ function writeAnnouncementsFile(data) {
 }
 
 let lastSyncError = null;
+// 두 소스를 독립적으로 수집한다 — 한쪽이 실패해도(교육부 세션 만료, 과기정통부 5xx 등)
+// 나머지 한쪽 결과는 저장한다.
 async function runSync(label = 'manual') {
-  try {
-    const result = await fetchAnnouncementsFromAPI();
-    writeAnnouncementsFile({
-      lastSyncedAt: result.fetchedAt,
-      source: 'data.go.kr · msitannouncementinfo',
-      totalCount: result.totalCount,
-      count: result.items.length,
-      items: result.items,
-    });
-    lastSyncError = null;
-    console.log(`[공고 동기화 · ${label}] ${result.items.length}건 저장 (전체 ${result.totalCount}건 중 최신)`);
-    return { ok: true, count: result.items.length, totalCount: result.totalCount };
-  } catch (e) {
-    lastSyncError = { message: String(e.message || e), at: new Date().toISOString() };
-    console.error(`[공고 동기화 실패 · ${label}]`, e.message || e);
+  const [msit, moe] = await Promise.allSettled([
+    fetchAnnouncementsFromAPI(),
+    fetchMoeAnnouncementsFromExcel(),
+  ]);
+
+  const items = [];
+  let totalCount = 0;
+  const errors = [];
+
+  if (moe.status === 'fulfilled') {
+    items.push(...moe.value.items);
+    totalCount += moe.value.totalCount;
+  } else {
+    errors.push(`교육부: ${moe.reason.message || moe.reason}`);
+  }
+  if (msit.status === 'fulfilled') {
+    items.push(...msit.value.items);
+    totalCount += msit.value.totalCount;
+  } else {
+    errors.push(`과기정통부: ${msit.reason.message || msit.reason}`);
+  }
+
+  if (items.length === 0 && errors.length === 2) {
+    lastSyncError = { message: errors.join(' / '), at: new Date().toISOString() };
+    console.error(`[공고 동기화 실패 · ${label}]`, lastSyncError.message);
     return { ok: false, error: lastSyncError.message };
   }
+
+  writeAnnouncementsFile({
+    lastSyncedAt: new Date().toISOString(),
+    source: 'moe.go.kr(교육부) + data.go.kr(과기정통부)',
+    totalCount,
+    count: items.length,
+    items,
+  });
+  lastSyncError = errors.length ? { message: errors.join(' / '), at: new Date().toISOString() } : null;
+  console.log(`[공고 동기화 · ${label}] ${items.length}건 저장 (전체 ${totalCount}건 중 최신)`
+    + (errors.length ? ` — 일부 실패: ${errors.join(' / ')}` : ''));
+  return { ok: true, count: items.length, totalCount };
 }
 
 // ── 공개 라우트: 저장된 공고 목록 조회 ──
