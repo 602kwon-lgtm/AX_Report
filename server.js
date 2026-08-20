@@ -413,12 +413,14 @@ app.post('/api/announcements/sync', async (req, res) => {
 // 매일 06:00 KST 자동 동기화
 cron.schedule('0 6 * * *', () => { runSync('cron-daily-06KST'); }, { timezone: 'Asia/Seoul' });
 
-// 서버 부팅 시: announcements.json이 없으면 즉시 1회 수집 (실패해도 서버 가동에는 영향 없음)
+// 서버 부팅 시 즉시 1회 수집 (실패해도 서버 가동에는 영향 없음).
+// 배포마다 항상 재수집해, 필터링 로직 등 코드가 바뀌면 관리자 비밀번호 없이도
+// 재배포만으로 저장된 announcements.json이 최신 로직으로 갱신되게 한다.
 // 키가 비어있으면 시도조차 하지 않고 안내 로그만 남긴다.
 if (!process.env.DATA_GO_KR_SERVICE_KEY) {
   console.warn('[공고 자동수집] DATA_GO_KR_SERVICE_KEY 미설정 — 수집을 건너뜁니다. .env에 키를 설정하세요.');
-} else if (!fs.existsSync(ANNOUNCEMENTS_FILE)) {
-  runSync('boot-initial');
+} else {
+  runSync('boot');
 }
 
 // ── 빌드된 React 앱 정적 서빙 ──
