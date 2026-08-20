@@ -335,6 +335,9 @@ async function fetchAnnouncementsFromAPI() {
     items: mapped,
     totalCount: Number(body.totalCount) || mapped.length,
     fetchedAt: new Date().toISOString(),
+    // TEMP DEBUG — 필터링 진단용, 확인 후 제거 예정
+    _debugRawCount: unwrapped.length,
+    _debugRawTitles: unwrapped.slice(0, 20).map((it) => it && it.subject),
   };
 }
 
@@ -369,6 +372,8 @@ async function runSync(label = 'manual') {
       totalCount: result.totalCount,
       count: result.items.length,
       items: result.items,
+      _debugRawCount: result._debugRawCount,
+      _debugRawTitles: result._debugRawTitles,
     });
     lastSyncError = null;
     console.log(`[공고 동기화 · ${label}] ${result.items.length}건 저장 (전체 ${result.totalCount}건 중 최신)`);
@@ -397,6 +402,8 @@ app.get('/api/announcements', (req, res) => {
     totalCount: data.totalCount || (data.items || []).length,
     source: data.source || null,
     lastSyncError,
+    _debugRawCount: data._debugRawCount,
+    _debugRawTitles: data._debugRawTitles,
   });
 });
 
