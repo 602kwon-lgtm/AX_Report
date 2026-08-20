@@ -5,7 +5,7 @@ import {
   Sparkles, Loader2, Calendar, FileText, TrendingUp, TrendingDown,
   ArrowRight, RefreshCw, Bell, ScrollText, Target, Edit3,
   Pencil, ListChecks, PenTool, BarChart3, ChevronDown, Copy, Check,
-  Upload, FileSpreadsheet, Database, CalendarClock, Lock, Unlock
+  Upload, FileSpreadsheet, Database, CalendarClock, Lock, Unlock, ExternalLink
 } from 'lucide-react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -1298,14 +1298,26 @@ ${profileText}
                 {useCustom ? '입력 공고문' : selectedAnnouncement?.title}
                 <span className="text-stone-500"> 을(를) 한성대 프로필 기준으로 분석합니다.</span>
               </div>
-              <button
-                onClick={runAnalysis}
-                disabled={loading || (useCustom && !customText.trim())}
-                className="px-4 py-2 bg-rose-900 hover:bg-rose-950 disabled:bg-stone-400 text-white text-sm rounded flex items-center gap-2"
-                style={{ fontFamily: 'IBM Plex Sans KR' }}>
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                {loading ? '분석 중' : 'AI 자격 검증'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {!useCustom && selectedAnnouncement?.viewUrl && (
+                  <a
+                    href={selectedAnnouncement.viewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-2 bg-white hover:bg-stone-50 border border-stone-300 text-stone-700 text-sm rounded flex items-center gap-1.5"
+                    style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                    <ExternalLink className="w-3.5 h-3.5" /> 사업공고 바로가기
+                  </a>
+                )}
+                <button
+                  onClick={runAnalysis}
+                  disabled={loading || (useCustom && !customText.trim())}
+                  className="px-4 py-2 bg-rose-900 hover:bg-rose-950 disabled:bg-stone-400 text-white text-sm rounded flex items-center gap-2"
+                  style={{ fontFamily: 'IBM Plex Sans KR' }}>
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  {loading ? '분석 중' : 'AI 자격 검증'}
+                </button>
+              </div>
             </div>
           )}
 

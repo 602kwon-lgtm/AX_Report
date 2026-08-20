@@ -200,8 +200,14 @@ const DATA_API_ROWS = 500;   // 한 번에 받아올 공고 수 (최신 N건). �
 // 두 소스(과기정통부·교육부) 모두 신청대상을 나타내는 별도 필드가 없고, 개인 모집·기업
 // 대상 지정·용역 입찰 등 대학과 무관한 공고가 섞여 있다. 제목에 "대학" 키워드가 포함된
 // 공고만 대학 대상 공고로 간주해 1차 필터링한다.
+// 단, "전문대학"(전문대·2·3년제)·"지방대학"(비수도권 한정)은 4년제 수도권 사립대인
+// 한성대와 맞지 않으므로 제외한다.
+const UNIVERSITY_EXCLUDE_KEYWORDS = ['전문대학', '지방대학'];
 function isUniversityTitle(title) {
-  return String(title || '').includes('대학');
+  const t = String(title || '');
+  if (!t.includes('대학')) return false;
+  if (UNIVERSITY_EXCLUDE_KEYWORDS.some((kw) => t.includes(kw))) return false;
+  return true;
 }
 function isUniversityAnnouncement(item) {
   return isUniversityTitle(item && item.subject);
