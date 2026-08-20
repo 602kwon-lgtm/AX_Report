@@ -192,7 +192,16 @@ app.post('/api/texts', (req, res) => {
 // ─────────────────────────────────────────────
 const ANNOUNCEMENTS_FILE = path.join(__dirname, 'announcements.json');
 const DATA_API_BASE = 'http://apis.data.go.kr/1721000/msitannouncementinfo/businessAnnouncMentList';
-const DATA_API_ROWS = 100;   // 한 번에 받아올 공고 수 (최신 N건)
+const DATA_API_ROWS = 500;   // 한 번에 받아올 공고 수 (최신 N건). 대학 키워드 필터링 후 남는 건수가
+                              // 적기 때문에(대학 대상 공고는 전체 중 일부) 넉넉히 받아온다.
+
+// 이 API는 과기정통부의 모든 사업공고(개인 모집·기업 대상 지정·연구과제 공모 등)를
+// 구분 없이 반환하며, 신청대상을 나타내는 별도 필드가 없다(공공데이터포털 명세 확인 결과).
+// 따라서 제목에 "대학" 키워드가 포함된 공고만 대학 대상 공고로 간주해 1차 필터링한다.
+function isUniversityAnnouncement(item) {
+  const subject = String(item && item.subject || '');
+  return subject.includes('대학');
+}
 
 // 사업공고 API의 viewUrl에서 nttSeqNo를 추출해 안정적인 id로 사용한다.
 function extractNttSeqNo(viewUrl) {
@@ -318,7 +327,10 @@ async function fetchAnnouncementsFromAPI() {
   // 각 항목이 {item: {...}}로 감싸진 경우 한 단계 벗긴다.
   const unwrapped = rawItems.map((x) => (x && x.item) ? x.item : x);
 
-  const mapped = unwrapped.map((it, i) => mapApiItem(it, i));
+  // 대학 대상 공고만 남긴다 (isUniversityAnnouncement 주석 참조).
+  const university = unwrapped.filter(isUniversityAnnouncement);
+
+  const mapped = university.map((it, i) => mapApiItem(it, i));
   return {
     items: mapped,
     totalCount: Number(body.totalCount) || mapped.length,
