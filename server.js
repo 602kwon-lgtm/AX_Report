@@ -212,6 +212,26 @@ function isUniversityTitle(title) {
   if (UNIVERSITY_EXCLUDE_KEYWORDS.some((kw) => t.includes(kw))) return false;
   return true;
 }
+// 게시일이 너무 오래된 공고는 대부분 마감이 지났으므로 목록에서 제외한다. 교육부의
+// 대학+사업 조건을 만족하는 공고는 몇 달에 한 번씩 올라오는 편이라(2026-08-20 확인 시
+// 최근 6개월 내 7건, 3개월로는 0건) 3개월은 너무 빡빡해 6개월로 잡는다.
+// 날짜를 못 읽는 경우(형식 불명 등)는 보수적으로 유지한다 — 잘못 걸러내는 것보다 낫다.
+const ANNOUNCEMENT_MAX_AGE_MONTHS = 6;
+function parsePressDate(pressDt) {
+  const digits = String(pressDt || '').replace(/[^0-9]/g, '');
+  if (digits.length < 8) return null;
+  const y = digits.slice(0, 4), m = digits.slice(4, 6), d = digits.slice(6, 8);
+  const dt = new Date(`${y}-${m}-${d}T00:00:00+09:00`);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+function isWithinMaxAge(pressDt, maxAgeMonths = ANNOUNCEMENT_MAX_AGE_MONTHS) {
+  const dt = parsePressDate(pressDt);
+  if (!dt) return true;
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - maxAgeMonths);
+  return dt >= cutoff;
+}
+
 function isUniversityAnnouncement(item) {
   return isUniversityTitle(item && item.subject);
 }
@@ -489,17 +509,20 @@ async function runSync(label = 'manual') {
     return { ok: false, error: lastSyncError.message };
   }
 
+  // 게시일 3개월 초과 공고는 대부분 마감이 지났으므로 제외한다.
+  const freshItems = items.filter((it) => isWithinMaxAge(it.pressDt));
+
   writeAnnouncementsFile({
     lastSyncedAt: new Date().toISOString(),
     source: 'moe.go.kr(교육부) + data.go.kr(과기정통부)',
     totalCount,
-    count: items.length,
-    items,
+    count: freshItems.length,
+    items: freshItems,
   });
   lastSyncError = errors.length ? { message: errors.join(' / '), at: new Date().toISOString() } : null;
-  console.log(`[공고 동기화 · ${label}] ${items.length}건 저장 (전체 ${totalCount}건 중 최신)`
+  console.log(`[공고 동기화 · ${label}] ${freshItems.length}건 저장 (수집 ${items.length}건 중 최근 ${ANNOUNCEMENT_MAX_AGE_MONTHS}개월 이내, 전체 ${totalCount}건 중 최신)`
     + (errors.length ? ` — 일부 실패: ${errors.join(' / ')}` : ''));
-  return { ok: true, count: items.length, totalCount };
+  return { ok: true, count: freshItems.length, totalCount };
 }
 
 // ── 공개 라우트: 저장된 공고 목록 조회 ──
@@ -535,14 +558,29 @@ app.post('/api/announcements/sync', async (req, res) => {
 // 매일 06:00 KST 자동 동기화
 cron.schedule('0 6 * * *', () => { runSync('cron-daily-06KST'); }, { timezone: 'Asia/Seoul' });
 
-// 서버 부팅 시 즉시 1회 수집 (실패해도 서버 가동에는 영향 없음).
-// 배포마다 항상 재수집해, 필터링 로직 등 코드가 바뀌면 관리자 비밀번호 없이도
-// 재배포만으로 저장된 announcements.json이 최신 로직으로 갱신되게 한다.
+// 오늘(KST) 안에 이미 동기화했는지 확인한다 — 매일 06:00 KST 1회로 제한하기 위함.
+function alreadySyncedTodayKST(lastSyncedAtIso) {
+  if (!lastSyncedAtIso) return false;
+  const fmt = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(d);
+  const parsed = new Date(lastSyncedAtIso);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return fmt(parsed) === fmt(new Date());
+}
+
+// 서버 부팅 시: 오늘 아직 동기화하지 않았을 때만 1회 수집한다 (실패해도 서버 가동에는
+// 영향 없음). Render 무료 플랜은 유휴 시 슬립했다가 요청마다 재기동되므로, 부팅마다
+// 무조건 재수집하면 하루에도 여러 번 호출될 수 있다 — 이를 막고 "하루 1회" 원칙을
+// 지키면서도, cron이 못 돌았던 경우(장시간 다운 등)를 스스로 복구하기 위한 안전장치다.
 // 키가 비어있으면 시도조차 하지 않고 안내 로그만 남긴다.
 if (!process.env.DATA_GO_KR_SERVICE_KEY) {
   console.warn('[공고 자동수집] DATA_GO_KR_SERVICE_KEY 미설정 — 수집을 건너뜁니다. .env에 키를 설정하세요.');
 } else {
-  runSync('boot');
+  const existing = readAnnouncementsFile();
+  if (existing && alreadySyncedTodayKST(existing.lastSyncedAt)) {
+    console.log('[공고 자동수집] 오늘 이미 동기화됨 — 부팅 시 재수집 생략 (다음 정기 동기화: 매일 06:00 KST)');
+  } else {
+    runSync('boot');
+  }
 }
 
 // ── 빌드된 React 앱 정적 서빙 ──
